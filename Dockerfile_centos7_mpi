@@ -130,3 +130,5 @@ RUN cp -r specfem3d_globe/bin_no_compressor specfem3d_globe/bin
 
 # add specfem3d_globe/bin to PATH
 ENV PATH=$PATH:/home/scoped/specfem3d_globe/bin
+ENV PATH=$PATH:/home/scoped/specfem3d_globe/bin_zfp
+ENV PATH=$PATH:/home/scoped/specfem3d_globe/bin_sz
