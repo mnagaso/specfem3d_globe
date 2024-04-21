@@ -35,13 +35,6 @@ RUN git clone https://github.com/SeismicData/asdf-library.git \
     && cd ../../ \
     && rm -rf asdf-library
 
-# install sz
-RUN git clone https://github.com/szcompressor/SZ.git \
-    && cd SZ \
-    && ./configure --prefix=/home/scoped/sz \
-    && make -j4 && make install \
-    && cd ../ && rm -rf SZ
-
 # install zfp
 RUN git clone https://github.com/LLNL/zfp.git \
     && mv zfp zfp_src \
@@ -50,6 +43,20 @@ RUN git clone https://github.com/LLNL/zfp.git \
     && cmake .. -DCMAKE_INSTALL_PREFIX=/home/scoped/zfp \
     && cmake --build . --config Release --target install \
     && cd ../../ && rm -rf zfp_src
+
+# install zstd
+RUN git clone https://github.com/facebook/zstd.git \
+    && mv zstd zstd_src \
+    && cd zstd_src \
+    && make -j4 && make install PREFIX=/home/scoped/zstd \
+    && cd ../ && rm -rf zstd_src
+
+# install sz
+RUN git clone https://github.com/szcompressor/SZ.git \
+    && cd SZ \
+    && ./configure --prefix=/home/scoped/sz \
+    && make -j4 && make install \
+    && cd ../ && rm -rf SZ
 
 # install lz4
 RUN git clone https://github.com/lz4/lz4.git \
@@ -61,7 +68,7 @@ RUN git clone https://github.com/lz4/lz4.git \
 # install ADIOS2
 RUN git clone https://github.com/ornladios/ADIOS2.git && cd ADIOS2 \
     && mkdir build && cd build\
-    && cmake .. -DCMAKE_INSTALL_PREFIX=/home/scoped/adios2 \
+    && cmake .. -DCMAKE_INSTALL_PREFIX=/home/scoped/adios2 -DZFP_ROOT=/home/scoped/zfp -DZSTD_ROOT=/home/scoped/zstd -DSZ_ROOT=/home/scoped/sz \
     && make -j4 && make install \
     && cd ../../ && rm -rf ADIOS2
 ENV PATH=$PATH:/home/scoped/adios2/bin
@@ -106,17 +113,17 @@ RUN cd specfem3d_globe \
     && cd ../
 
 # compile specfem3d_globe (with compressor lz4)
-RUN cd specfem3d_globe \
-    && sed -i 's/integer, parameter :: ADIOS_COMPRESSION_ALGORITHM = 2/integer, parameter :: ADIOS_COMPRESSION_ALGORITHM = 3/' setup/constants.h.in \
-    && ./configure --enable-vectorization \
-        --with-adios2 ADIOS2_CONFIG=/home/scoped/adios2/bin/adios2-config \
-        --with-asdf 'ASDF_LIBS=-L/home/scoped/asdf/lib64 -L/opt/intel/compilers_and_libraries/linux/mpi/intel64/lib/release/ -L/home/scoped/hdf5/lib' \
-        MPIFC=mpif90 FC=gfortran CC=gcc \
-        'FLAGS_CHECK=-O2 -mcmodel=medium -Wunused -Waliasing -Wampersand -Wcharacter-truncation -Wline-truncation -Wsurprising -Wno-tabs -Wunderflow' \
-        CFLAGS="-std=c99" \
-    && make all \
-    && mv bin bin_lz4 \
-    && cd ../
+#RUN cd specfem3d_globe \
+#    && sed -i 's/integer, parameter :: ADIOS_COMPRESSION_ALGORITHM = 2/integer, parameter :: ADIOS_COMPRESSION_ALGORITHM = 3/' setup/constants.h.in \
+#    && ./configure --enable-vectorization \
+#        --with-adios2 ADIOS2_CONFIG=/home/scoped/adios2/bin/adios2-config \
+#        --with-asdf 'ASDF_LIBS=-L/home/scoped/asdf/lib64 -L/opt/intel/compilers_and_libraries/linux/mpi/intel64/lib/release/ -L/home/scoped/hdf5/lib' \
+#        MPIFC=mpif90 FC=gfortran CC=gcc \
+#        'FLAGS_CHECK=-O2 -mcmodel=medium -Wunused -Waliasing -Wampersand -Wcharacter-truncation -Wline-truncation -Wsurprising -Wno-tabs -Wunderflow' \
+#        CFLAGS="-std=c99" \
+#    && make all \
+#    && mv bin bin_lz4 \
+#    && cd ../
 
 # copy back bin_no_compressor to bin
 RUN cp -r specfem3d_globe/bin_no_compressor specfem3d_globe/bin
