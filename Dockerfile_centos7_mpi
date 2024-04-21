@@ -35,6 +35,29 @@ RUN git clone https://github.com/SeismicData/asdf-library.git \
     && cd ../../ \
     && rm -rf asdf-library
 
+# install sz
+RUN git clone https://github.com/szcompressor/SZ.git \
+    && cd SZ \
+    && ./configure --prefix=/home/scoped/sz \
+    && make -j4 && make install \
+    && cd ../ && rm -rf SZ
+
+# install zfp
+RUN git clone https://github.com/LLNL/zfp.git \
+    && mv zfp zfp_src \
+    && cd zfp_src \
+    && mkdir build && cd build \
+    && cmake .. -DCMAKE_INSTALL_PREFIX=/home/scoped/zfp \
+    && cmake --build . --config Release --target install \
+    && cd ../../ && rm -rf zfp_src
+
+# install lz4
+RUN git clone https://github.com/lz4/lz4.git \
+    && mv lz4 lz4_src \
+    && cd lz4_src \
+    && make -j4 && make install PREFIX=/home/scoped/lz4 \
+    && cd ../ && rm -rf lz4_src
+
 # install ADIOS2
 RUN git clone https://github.com/ornladios/ADIOS2.git && cd ADIOS2 \
     && mkdir build && cd build\
@@ -43,7 +66,7 @@ RUN git clone https://github.com/ornladios/ADIOS2.git && cd ADIOS2 \
     && cd ../../ && rm -rf ADIOS2
 ENV PATH=$PATH:/home/scoped/adios2/bin
 
-# compile specfem3d_globe
+# compile specfem3d_globe (without compressor)
 RUN git clone --recursive --branch devel https://github.com/SPECFEM/specfem3d_globe.git \
     && cd specfem3d_globe \
     && ./configure --enable-vectorization \
@@ -53,12 +76,50 @@ RUN git clone --recursive --branch devel https://github.com/SPECFEM/specfem3d_gl
         'FLAGS_CHECK=-O2 -mcmodel=medium -Wunused -Waliasing -Wampersand -Wcharacter-truncation -Wline-truncation -Wsurprising -Wno-tabs -Wunderflow' \
         CFLAGS="-std=c99" \
     && make all \
+    && mv bin bin_no_compressor \
     && cd ../
+
+# compile specfem3d_globe (with compressor zfp)
+RUN cd specfem3d_globe \
+    && sed -i 's/integer, parameter :: ADIOS_COMPRESSION_ALGORITHM = 0/integer, parameter :: ADIOS_COMPRESSION_ALGORITHM = 1/' setup/constants.h.in \
+    && ./configure --enable-vectorization \
+        --with-adios2 ADIOS2_CONFIG=/home/scoped/adios2/bin/adios2-config \
+        --with-asdf 'ASDF_LIBS=-L/home/scoped/asdf/lib64 -L/opt/intel/compilers_and_libraries/linux/mpi/intel64/lib/release/ -L/home/scoped/hdf5/lib' \
+        MPIFC=mpif90 FC=gfortran CC=gcc \
+        'FLAGS_CHECK=-O2 -mcmodel=medium -Wunused -Waliasing -Wampersand -Wcharacter-truncation -Wline-truncation -Wsurprising -Wno-tabs -Wunderflow' \
+        CFLAGS="-std=c99" \
+    && make all \
+    && mv bin bin_zfp \
+    && cd ../
+
+# compile specfem3d_globe (with compressor sz)
+RUN cd specfem3d_globe \
+    && sed -i 's/integer, parameter :: ADIOS_COMPRESSION_ALGORITHM = 1/integer, parameter :: ADIOS_COMPRESSION_ALGORITHM = 2/' setup/constants.h.in \
+    && ./configure --enable-vectorization \
+        --with-adios2 ADIOS2_CONFIG=/home/scoped/adios2/bin/adios2-config \
+        --with-asdf 'ASDF_LIBS=-L/home/scoped/asdf/lib64 -L/opt/intel/compilers_and_libraries/linux/mpi/intel64/lib/release/ -L/home/scoped/hdf5/lib' \
+        MPIFC=mpif90 FC=gfortran CC=gcc \
+        'FLAGS_CHECK=-O2 -mcmodel=medium -Wunused -Waliasing -Wampersand -Wcharacter-truncation -Wline-truncation -Wsurprising -Wno-tabs -Wunderflow' \
+        CFLAGS="-std=c99" \
+    && make all \
+    && mv bin bin_sz \
+    && cd ../
+
+# compile specfem3d_globe (with compressor lz4)
+RUN cd specfem3d_globe \
+    && sed -i 's/integer, parameter :: ADIOS_COMPRESSION_ALGORITHM = 2/integer, parameter :: ADIOS_COMPRESSION_ALGORITHM = 3/' setup/constants.h.in \
+    && ./configure --enable-vectorization \
+        --with-adios2 ADIOS2_CONFIG=/home/scoped/adios2/bin/adios2-config \
+        --with-asdf 'ASDF_LIBS=-L/home/scoped/asdf/lib64 -L/opt/intel/compilers_and_libraries/linux/mpi/intel64/lib/release/ -L/home/scoped/hdf5/lib' \
+        MPIFC=mpif90 FC=gfortran CC=gcc \
+        'FLAGS_CHECK=-O2 -mcmodel=medium -Wunused -Waliasing -Wampersand -Wcharacter-truncation -Wline-truncation -Wsurprising -Wno-tabs -Wunderflow' \
+        CFLAGS="-std=c99" \
+    && make all \
+    && mv bin bin_lz4 \
+    && cd ../
+
+# copy back bin_no_compressor to bin
+RUN cp -r specfem3d_globe/bin_no_compressor specfem3d_globe/bin
 
 # add specfem3d_globe/bin to PATH
 ENV PATH=$PATH:/home/scoped/specfem3d_globe/bin
-
-RUN mkdir -p /home/scoped/sim_dir/OUTPUT_FILES \
-    && mkdir -p /home/scoped/sim_dir/DATA \
-    && mkdir -p /home/scoped/sim_dir/DATABASES_MPI \
-    && cp -r /home/scoped/specfem3d_globe/DATA/* /home/scoped/sim_dir/DATA/

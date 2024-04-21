@@ -22,7 +22,8 @@ env:
   REGISTRY: ghcr.io
   # github.repository as <account>/<repo>
   # CHANGE THE IMAGE NAME HERE
-  IMAGE_NAME: seisscoped/specfem3d_globe
+  #IMAGE_NAME: seisscoped/specfem3d_globe
+  IMAGE_NAME: mnagaso/specfem3d_globe
 
 jobs:
   build-centos:
@@ -37,11 +38,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-      
+
       # Setup for Multi-platform image
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
-        
+
       # Workaround: https://github.com/docker/build-push-action/issues/461
       - name: Setup Docker buildx
         uses: docker/setup-buildx-action@v2
@@ -63,7 +64,7 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v2
         with:
@@ -98,12 +99,12 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=local,src=/tmp/.buildx-cache-centos7
           cache-to: type=local,dest=/tmp/.buildx-cache-centos7-new
-      
+
       - name: Move cache
         run: |
-          rm -rf /tmp/.buildx-cache-centos7 
+          rm -rf /tmp/.buildx-cache-centos7
           mv /tmp/.buildx-cache-centos7-new /tmp/.buildx-cache-centos7
-     
+
 
 
   build-centos-mpi:
@@ -119,11 +120,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-      
+
       # Setup for Multi-platform image
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
-        
+
       # Workaround: https://github.com/docker/build-push-action/issues/461
       - name: Setup Docker buildx
         uses: docker/setup-buildx-action@v2
@@ -145,7 +146,7 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v2
         with:
@@ -180,10 +181,10 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=local,src=/tmp/.buildx-cache-centos7-mpi
           cache-to: type=local,dest=/tmp/.buildx-cache-centos7-mpi-new
-      
+
       - name: Move cache
         run: |
-          rm -rf /tmp/.buildx-cache-centos7-mpi 
+          rm -rf /tmp/.buildx-cache-centos7-mpi
           mv /tmp/.buildx-cache-centos7-mpi-new /tmp/.buildx-cache-centos7-mpi
   build-ubuntu-mpi:
 
@@ -198,11 +199,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-      
+
       # Setup for Multi-platform image
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
-        
+
       # Workaround: https://github.com/docker/build-push-action/issues/461
       - name: Setup Docker buildx
         uses: docker/setup-buildx-action@v2
@@ -224,7 +225,7 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v2
         with:
@@ -259,10 +260,10 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=local,src=/tmp/.buildx-cache-mpi
           cache-to: type=local,dest=/tmp/.buildx-cache-mpi-new
-      
+
       - name: Move cache
         run: |
-          rm -rf /tmp/.buildx-cache-mpi 
+          rm -rf /tmp/.buildx-cache-mpi
           mv /tmp/.buildx-cache-mpi-new /tmp/.buildx-cache-mpi
   build-ubuntu:
 
@@ -277,11 +278,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-      
+
       # Setup for Multi-platform image
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
-        
+
       # Workaround: https://github.com/docker/build-push-action/issues/461
       - name: Setup Docker buildx
         uses: docker/setup-buildx-action@v2
@@ -303,7 +304,7 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v2
         with:
@@ -341,8 +342,8 @@ jobs:
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new
 
-      
+
       - name: Move cache
         run: |
-          rm -rf /tmp/.buildx-cache 
+          rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
