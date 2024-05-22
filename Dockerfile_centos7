@@ -1,5 +1,8 @@
 FROM ghcr.io/seisscoped/container-base:centos7
 
+#
+# below is the same contents as Dockerfile_centos7_mpi
+#
 RUN yum install -y cmake3 boost-devel \
     && ln -s /bin/cmake3 /bin/cmake
 
@@ -14,14 +17,14 @@ RUN wget https://support.hdfgroup.org/ftp/HDF5/releases/hdf5-1.13/hdf5-1.13.3/sr
     && CC=mpicc ./configure --enable-fortran --enable-parallel --prefix=/home/scoped/hdf5 --enable-shared --enable-static \
     && make -j12 && make install \
     && cd .. && rm -rf hdf5-*
-#
+
 # HDF5_DIR for pypaw
 ENV HDF5_DIR=/home/scoped/hdf5
 # add hdf5 bin to PATH
 ENV PATH=$PATH:/home/scoped/hdf5/bin
 # add hdf5 lib to LD_LIBRARY_PATH
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/scoped/hdf5/lib
-#
+
 # install asdf-library
 # workaround to use gfortran with intel mpi (not a good engineering practice)
 RUN mv /opt/intel/compilers_and_libraries/linux/mpi/intel64/include/mpi.mod /opt/intel/compilers_and_libraries/linux/mpi/intel64/include/mpi.modbak \
@@ -35,15 +38,45 @@ RUN git clone https://github.com/SeismicData/asdf-library.git \
     && cd ../../ \
     && rm -rf asdf-library
 
+# install zfp
+RUN git clone https://github.com/LLNL/zfp.git \
+    && mv zfp zfp_src \
+    && cd zfp_src \
+    && mkdir build && cd build \
+    && cmake .. -DCMAKE_INSTALL_PREFIX=/home/scoped/zfp \
+    && cmake --build . --config Release --target install \
+    && cd ../../ && rm -rf zfp_src
+
+# install zstd
+RUN git clone https://github.com/facebook/zstd.git \
+    && mv zstd zstd_src \
+    && cd zstd_src \
+    && make -j4 && make install PREFIX=/home/scoped/zstd \
+    && cd ../ && rm -rf zstd_src
+
+# install sz
+RUN git clone https://github.com/szcompressor/SZ.git \
+    && cd SZ \
+    && ./configure --prefix=/home/scoped/sz \
+    && make -j4 && make install \
+    && cd ../ && rm -rf SZ
+
+# install lz4
+RUN git clone https://github.com/lz4/lz4.git \
+    && mv lz4 lz4_src \
+    && cd lz4_src \
+    && make -j4 && make install PREFIX=/home/scoped/lz4 \
+    && cd ../ && rm -rf lz4_src
+
 # install ADIOS2
 RUN git clone https://github.com/ornladios/ADIOS2.git && cd ADIOS2 \
     && mkdir build && cd build\
-    && cmake .. -DCMAKE_INSTALL_PREFIX=/home/scoped/adios2 \
+    && cmake .. -DCMAKE_INSTALL_PREFIX=/home/scoped/adios2 -DZFP_ROOT=/home/scoped/zfp -DZSTD_ROOT=/home/scoped/zstd -DSZ_ROOT=/home/scoped/sz \
     && make -j4 && make install \
     && cd ../../ && rm -rf ADIOS2
 ENV PATH=$PATH:/home/scoped/adios2/bin
 
-# compile specfem3d_globe
+# compile specfem3d_globe (without compressor)
 RUN git clone --recursive --branch devel https://github.com/SPECFEM/specfem3d_globe.git \
     && cd specfem3d_globe \
     && ./configure --enable-vectorization \
@@ -53,17 +86,64 @@ RUN git clone --recursive --branch devel https://github.com/SPECFEM/specfem3d_gl
         'FLAGS_CHECK=-O2 -mcmodel=medium -Wunused -Waliasing -Wampersand -Wcharacter-truncation -Wline-truncation -Wsurprising -Wno-tabs -Wunderflow' \
         CFLAGS="-std=c99" \
     && make all \
+    && mv bin bin_no_compressor \
     && cd ../
+
+# compile specfem3d_globe (with compressor zfp)
+RUN cd specfem3d_globe \
+    && sed -i 's/integer, parameter :: ADIOS_COMPRESSION_ALGORITHM = 0/integer, parameter :: ADIOS_COMPRESSION_ALGORITHM = 1/' setup/constants.h.in \
+    && ./configure --enable-vectorization \
+        --with-adios2 ADIOS2_CONFIG=/home/scoped/adios2/bin/adios2-config \
+        --with-asdf 'ASDF_LIBS=-L/home/scoped/asdf/lib64 -L/opt/intel/compilers_and_libraries/linux/mpi/intel64/lib/release/ -L/home/scoped/hdf5/lib' \
+        MPIFC=mpif90 FC=gfortran CC=gcc \
+        'FLAGS_CHECK=-O2 -mcmodel=medium -Wunused -Waliasing -Wampersand -Wcharacter-truncation -Wline-truncation -Wsurprising -Wno-tabs -Wunderflow' \
+        CFLAGS="-std=c99" \
+    && make all \
+    && mv bin bin_zfp \
+    && cd ../
+
+# compile specfem3d_globe (with compressor sz)
+RUN cd specfem3d_globe \
+    && sed -i 's/integer, parameter :: ADIOS_COMPRESSION_ALGORITHM = 1/integer, parameter :: ADIOS_COMPRESSION_ALGORITHM = 2/' setup/constants.h.in \
+    && ./configure --enable-vectorization \
+        --with-adios2 ADIOS2_CONFIG=/home/scoped/adios2/bin/adios2-config \
+        --with-asdf 'ASDF_LIBS=-L/home/scoped/asdf/lib64 -L/opt/intel/compilers_and_libraries/linux/mpi/intel64/lib/release/ -L/home/scoped/hdf5/lib' \
+        MPIFC=mpif90 FC=gfortran CC=gcc \
+        'FLAGS_CHECK=-O2 -mcmodel=medium -Wunused -Waliasing -Wampersand -Wcharacter-truncation -Wline-truncation -Wsurprising -Wno-tabs -Wunderflow' \
+        CFLAGS="-std=c99" \
+    && make all \
+    && mv bin bin_sz \
+    && cd ../
+
+# compile specfem3d_globe (with compressor lz4)
+#RUN cd specfem3d_globe \
+#    && sed -i 's/integer, parameter :: ADIOS_COMPRESSION_ALGORITHM = 2/integer, parameter :: ADIOS_COMPRESSION_ALGORITHM = 3/' setup/constants.h.in \
+#    && ./configure --enable-vectorization \
+#        --with-adios2 ADIOS2_CONFIG=/home/scoped/adios2/bin/adios2-config \
+#        --with-asdf 'ASDF_LIBS=-L/home/scoped/asdf/lib64 -L/opt/intel/compilers_and_libraries/linux/mpi/intel64/lib/release/ -L/home/scoped/hdf5/lib' \
+#        MPIFC=mpif90 FC=gfortran CC=gcc \
+#        'FLAGS_CHECK=-O2 -mcmodel=medium -Wunused -Waliasing -Wampersand -Wcharacter-truncation -Wline-truncation -Wsurprising -Wno-tabs -Wunderflow' \
+#        CFLAGS="-std=c99" \
+#    && make all \
+#    && mv bin bin_lz4 \
+#    && cd ../
+
+# copy back bin_no_compressor to bin
+RUN cp -r specfem3d_globe/bin_no_compressor specfem3d_globe/bin
 
 # add specfem3d_globe/bin to PATH
 ENV PATH=$PATH:/home/scoped/specfem3d_globe/bin
+#ENV PATH=$PATH:/home/scoped/specfem3d_globe/bin_zfp
+#ENV PATH=$PATH:/home/scoped/specfem3d_globe/bin_sz
 
+#
+# from here we add python packages on top of the Dockerfile_centos7_mpi
+#
 # install necessary python packages for pre/post processing
 RUN conda config --prepend channels conda-forge \
     && conda install \
         obspy \
-        pandas \
         cartopy \
-    && pip install git+https://github.com/adjtomo/pyadjoint.git \
+        ipywidgets \
     && conda clean -afy \
     && docker-clean
