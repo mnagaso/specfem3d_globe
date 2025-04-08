@@ -46,7 +46,7 @@ program combine_vol_data
 !
 
   use constants, only: &
-    CUSTOM_REAL,MAX_STRING_LEN,NGLLX,NGLLY,NGLLZ,NR_DENSITY,IFLAG_IN_FICTITIOUS_CUBE,IIN
+    CUSTOM_REAL,MAX_STRING_LEN,NGLLX,NGLLY,NGLLZ,NR_DENSITY,IFLAG_IN_FICTITIOUS_CUBE,IIN,N_SLS
 
   use constants_solver, only: &
     NGLOB_CRUST_MANTLE,NSPEC_CRUST_MANTLE,NSPEC_OUTER_CORE,NSPEC_INNER_CORE,NPROCTOT_VAL
@@ -103,7 +103,7 @@ program combine_vol_data
 
   integer, dimension(:), allocatable :: idoubling_inner_core ! to get rid of fictitious elements in central cube
 
-  character(len=MAX_STRING_LEN) :: arg(7)
+  character(len=MAX_STRING_LEN) :: arg(8)
   character(len=MAX_STRING_LEN) :: filename, outdir
   character(len=MAX_STRING_LEN) :: data_file, var_name
 
@@ -136,6 +136,7 @@ program combine_vol_data
   integer :: np, ne
   integer :: ier
   integer :: proc_id
+  integer :: i_iter = -1 ! iteration number for forward array
 
   character(len=MAX_STRING_LEN) :: sline,slice_list_name
 
@@ -169,11 +170,11 @@ program combine_vol_data
 #ifdef USE_ADIOS_INSTEAD_OF_MESH
   ! ADIOS
   ! input arguments
-  do i = 1, 7
+  do i = 1, 8
     call get_command_argument(i,arg(i))
   enddo
   call read_args_adios(arg, var_name, value_file_name, mesh_file_name, slice_list_name, &
-                       outdir, ires, iregion)
+                       outdir, ires, iregion, i_iter)
 #else
   ! default
   do i = 1, 7
@@ -414,7 +415,7 @@ program combine_vol_data
 #ifdef USE_ADIOS_INSTEAD_OF_MESH
   ! ADIOS
   ! opens single mesh file
-  call init_adios(value_file_name, mesh_file_name)
+  call init_adios(value_file_name, mesh_file_name, i_iter)
 #endif
 
   do ir = irs, ire
@@ -577,7 +578,8 @@ program combine_vol_data
 #ifdef USE_ADIOS_INSTEAD_OF_MESH
       ! ADIOS
       ! reads values
-      call read_values_adios(var_name, iproc, ir, nspec_list(it), data)
+      call read_values_adios(var_name, iproc, ir, i_iter, ires, nglob_list(it), nspec_list(it), &
+                            ibool, data)
       data_file = trim(var_name)
 #else
       ! default binary

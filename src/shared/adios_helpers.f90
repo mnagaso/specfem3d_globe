@@ -60,6 +60,7 @@ module adios_helpers_mod
   ! from adios_helpers_readers_mod
   public :: read_adios_array
   public :: read_adios_array_gll_check
+  public :: read_adios_array_gll_check_forward
   public :: read_adios_scalar
   public :: read_adios_scalar_local_dim
   public :: read_adios_perform
