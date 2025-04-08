@@ -302,7 +302,7 @@ subroutine read_values_adios(var_name, iproc, ir, i_iter, ires, nglob, nspec, ib
   integer, intent(in) :: iproc, ir, i_iter, ires, nspec, nglob
   integer, dimension(:,:,:,:), intent(in) :: ibool
   real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ,nspec), intent(inout) :: data
-  real(kind=CUSTOM_REAL), dimension(:), allocatable :: data_tmp ! used for reading forward arrays
+  real(kind=CUSTOM_REAL), dimension(:,:), allocatable :: data_tmp ! used for reading forward arrays
   ! Variables
   integer(kind=8), dimension(1) :: start, count
   integer(kind=8) :: sel
@@ -422,7 +422,7 @@ subroutine read_values_adios(var_name, iproc, ir, i_iter, ires, nglob, nspec, ib
   ! gets data values
   if (is_forward) then
     ! allocate data_tmp
-    allocate(data_tmp(NDIM*nglob))
+    allocate(data_tmp(NDIM,nglob))
 
     ! assumes GLL type array size (NGLLX,NGLLY,NGLLZ,nspec)
     call read_adios_array_gll_check_forward(myadios_val_file,myadios_val_group,iproc,nglob,&
@@ -435,7 +435,7 @@ subroutine read_values_adios(var_name, iproc, ir, i_iter, ires, nglob, nspec, ib
         do j = 1,NGLLY, dj
           do i = 1,NGLLX, di
             iglob = ibool(i,j,k,ispec)
-            data(i,j,k,ispec) = data_tmp(iglob)
+            data(i,j,k,ispec) = data_tmp(3,iglob) ! z coordinate for now
           end do
         end do
       end do
