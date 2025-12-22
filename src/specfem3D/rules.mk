@@ -462,6 +462,10 @@ $O/prepare_gravity.solverstatic.o: $O/SIEM_math_library.shared.o
 
 $O/finalize_simulation.solverstatic.o: $O/hdf5_io_server.solverstatic.o
 
+# ensure io_bandwidth module is available before compiling HDF5 I/O routines
+$O/hdf5_io_server.solverstatic.o: $O/io_tester.solverstatic.o
+$O/save_forward_arrays_hdf5.solverstatic.o: $O/io_tester.solverstatic.o
+
 ###
 ### specfem3D - optimized flags and dependence on values from mesher here
 ###
