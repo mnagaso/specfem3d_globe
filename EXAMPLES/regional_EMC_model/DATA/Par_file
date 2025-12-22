@@ -35,7 +35,7 @@ NPROC_ETA                       = 2
 #-----------------------------------------------------------
 
 # 1D models with real structure:
-# 1D_isotropic_prem, 1D_transversely_isotropic_prem, 1D_iasp91, 1D_1066a, 1D_ak135f_no_mud, 1D_ref, 1D_ref_iso, 1D_jp3d,1D_sea99
+# 1D_isotropic_prem, 1D_transversely_isotropic_prem, 1D_iasp91, 1D_1066a, 1D_ak135f_no_mud, 1D_ref, 1D_ref_iso, 1D_jp3d, 1D_sea99, 1D_Berkeley
 #
 # 1D models with only one fictitious averaged crustal layer:
 # 1D_isotropic_prem_onecrust, 1D_transversely_isotropic_prem_onecrust, 1D_iasp91_onecrust, 1D_1066a_onecrust, 1D_ak135f_no_mud_onecrust
@@ -43,7 +43,9 @@ NPROC_ETA                       = 2
 # fully 3D models:
 # transversely_isotropic_prem_plus_3D_crust_2.0, 3D_anisotropic, 3D_attenuation,
 # s20rts, s40rts, s362ani, s362iso, s362wmani, s362ani_prem, s362ani_3DQ, s362iso_3DQ,
-# s29ea, sea99_jp3d1994, sea99, jp3d1994, heterogen, full_sh, sgloberani_aniso, sgloberani_iso
+# s29ea, sea99_jp3d1994, sea99, jp3d1994, heterogen, full_sh, sgloberani_aniso, sgloberani_iso,
+# spiral, emc_model, emc_model_qmu, emc_model_tiso, emc_model_tiso_qmu, semucb_A3d, semucb_A3d_3dQ
+# (see manual for more...)
 #
 # 3D crustal models:
 # crust1.0, crust2.0, EPcrust, EuCRUST, crustmaps, crustSH
@@ -152,7 +154,7 @@ SPONGE_RADIUS_IN_DEGREES        = 25.d0
 # use one (and only one) of the two flags below. UNDO_ATTENUATION is much better (it is exact)
 # but requires a significant amount of disk space for temporary storage.
 PARTIAL_PHYS_DISPERSION_ONLY    = .false.
-UNDO_ATTENUATION                = .false.
+UNDO_ATTENUATION                = .true.
 
 ## undo attenuation memory
 # How much memory (in GB) is installed on your machine per CPU core
@@ -172,7 +174,7 @@ UNDO_ATTENUATION                = .false.
 # and run your job with "aprun -n$NPROC -N1 -S1 -j1"
 # (each host has 32 GB on Titan, each GPU has 6 GB, thus even if all the GPU arrays are duplicated on the host
 #  this leaves 32 - 6 = 26 GB free on the host; leaving 1 GB for the Linux system, we can safely use 100% of 25 GB)
-MEMORY_INSTALLED_PER_CORE_IN_GB = 4.d0
+MEMORY_INSTALLED_PER_CORE_IN_GB = 1.d0
 # What percentage of this total do you allow us to use for arrays to undo attenuation, keeping in mind that you
 # need to leave some memory available for the GNU/Linux system to run
 # (a typical value is 85%; any value below is fine but the code will then save a lot of data to disk;
@@ -285,6 +287,7 @@ USE_FORCE_POINT_SOURCE          = .false.
 # half duration is interpreted as a PERIOD just to avoid changing CMTSOLUTION file format
 # default is .false. which uses Heaviside function
 USE_MONOCHROMATIC_CMT_SOURCE    = .false.
+USE_SINSQ_STF  = .false.
 
 # print source time function
 PRINT_SOURCE_TIME_FUNCTION      = .true.
@@ -363,7 +366,7 @@ SAVE_AZIMUTHAL_ANISO_KL_ONLY    = .false.
 
 # output approximate Hessian in crust mantle region.
 # means to save the preconditioning for gradients, they are cross correlations between forward and adjoint accelerations.
-APPROXIMATE_HESS_KL             = .false.
+APPROXIMATE_HESS_KL             = .true.
 
 # forces transverse isotropy for all mantle elements
 # (default is to use transverse isotropy only between crust and 220)
@@ -435,10 +438,10 @@ BROADCAST_SAME_MESH_AND_MODEL   = .false.
 # set to true to use GPUs
 GPU_MODE                        = .false.
 # Only used if GPU_MODE = .true. :
-GPU_RUNTIME                     = 1
+GPU_RUNTIME                     = 0
 # 2 (OpenCL), 1 (Cuda) ou 0 (Compile-time -- does not work if configured with --with-cuda *AND* --with-opencl)
-GPU_PLATFORM                    = NVIDIA
-GPU_DEVICE                      = Tesla
+GPU_PLATFORM                    = *
+GPU_DEVICE                      = *
 
 # set to true to use the ADIOS library for I/Os
 ADIOS_ENABLED                   = .false.

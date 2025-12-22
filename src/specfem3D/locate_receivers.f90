@@ -42,7 +42,7 @@
   use shared_parameters, only: OUTPUT_FILES,R_PLANET
 
   use specfem_par, only: &
-    myrank,DT,NSTEP, &
+    myrank,DT,NSTEP,NTSTEP_BETWEEN_OUTPUT_SAMPLE, &
     nrec,islice_selected_rec,ispec_selected_rec, &
     xi_receiver,eta_receiver,gamma_receiver,station_name,network_name, &
     stlat,stlon,stele,stbur,nu_rec,receiver_final_distance_max, &
@@ -109,7 +109,9 @@
   character(len=MAX_LENGTH_STATION_NAME), dimension(nrec) :: station_name_found
   character(len=MAX_LENGTH_NETWORK_NAME), dimension(nrec) :: network_name_found
 
+  ! band code
   character(len=2) :: bic
+  double precision :: sampling_rate
 
   ! sorting order
   integer, allocatable, dimension(:) :: irec_dist_ordered
@@ -184,15 +186,18 @@
 
     ! record three components for each station
     do iorientation = 1,3
-      !     North
+      ! initializes azimuth/dip
+      stazi = 0.d0
+      stdip = 0.d0
+      ! North
       if (iorientation == 1) then
         stazi = 0.d0
         stdip = 0.d0
-      !     East
+      ! East
       else if (iorientation == 2) then
         stazi = 90.d0
         stdip = 0.d0
-      !     Vertical
+      ! Vertical
       else if (iorientation == 3) then
         stazi = 0.d0
         stdip = - 90.d0
@@ -205,15 +210,14 @@
       phin = stazi*DEGREES_TO_RADIANS
 
       ! we use the same convention as in Harvard normal modes for the orientation
-
-      !     vertical component
+      ! vertical component
       n(1) = cos(thetan)
-      !     N-S component
+      ! N-S component
       n(2) = - sin(thetan)*cos(phin)
-      !     E-W component
+      ! E-W component
       n(3) = sin(thetan)*sin(phin)
 
-      !     get the Cartesian components of n in the model: nu
+      ! get the Cartesian components of n in the model: nu
       nu_rec(iorientation,1,irec) = n(1)*sint*cosp + n(2)*cost*cosp - n(3)*sinp
       nu_rec(iorientation,2,irec) = n(1)*sint*sinp + n(2)*cost*sinp + n(3)*cosp
       nu_rec(iorientation,3,irec) = n(1)*cost - n(2)*sint
@@ -278,9 +282,9 @@
 
   ! create RECORDHEADERS file with usual format for normal-mode codes
   if (myrank == 0) then
-
-    ! get the base pathname for output files
-    call band_instrument_code(DT,bic)
+    ! get band code
+    sampling_rate = DT * NTSTEP_BETWEEN_OUTPUT_SAMPLE
+    call band_instrument_code(sampling_rate,bic)
 
     ! create file for QmX Harvard
     ! Harvard format does not support the network name
@@ -601,7 +605,7 @@
   if (myrank == 0) then
     tCPU = wtime() - time_start
     write(IMAIN,*)
-    write(IMAIN,*) 'Elapsed time for receiver detection in seconds = ',tCPU
+    write(IMAIN,*) 'Elapsed time for receiver detection in seconds = ',sngl(tCPU)
     write(IMAIN,*)
     write(IMAIN,*) 'End of receiver detection - done'
     write(IMAIN,*)

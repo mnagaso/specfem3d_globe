@@ -216,6 +216,11 @@
   call read_value_logical(USE_FORCE_POINT_SOURCE, 'USE_FORCE_POINT_SOURCE', ier)
   if (ier /= 0) stop 'an error occurred while reading the parameter file: USE_FORCE_POINT_SOURCE'
 
+  ! sin squared STF - used for PEGS
+  call read_value_logical(USE_SINSQ_STF, 'USE_SINSQ_STF', ier)
+  if (ier /= 0) stop 'an error occurred while reading the parameter file: USE_SINSQ_STF'
+
+
   ! monochromatic double couple source
   call read_value_logical(USE_MONOCHROMATIC_CMT_SOURCE, 'USE_MONOCHROMATIC_CMT_SOURCE', ier)
   if (ier /= 0) stop 'an error occurred while reading the parameter file: USE_MONOCHROMATIC_CMT_SOURCE'
@@ -245,11 +250,11 @@
   call read_value_logical(OUTPUT_SEISMOS_SAC_BINARY, 'OUTPUT_SEISMOS_SAC_BINARY', ier)
   if (ier /= 0) stop 'an error occurred while reading the parameter file: OUTPUT_SEISMOS_SAC_BINARY'
   call read_value_logical(OUTPUT_SEISMOS_ASDF, 'OUTPUT_SEISMOS_ASDF', ier)
-  if (ier /= 0) stop 'an error occurred while reading the parameter file: OUTPUT_HDF5'
+  if (ier /= 0) stop 'an error occurred while reading the parameter file: OUTPUT_SEISMOS_ASDF'
   call read_value_logical(OUTPUT_SEISMOS_3D_ARRAY, 'OUTPUT_SEISMOS_3D_ARRAY', ier)
-  if (ier /= 0) stop 'an error occurred while reading the parameter file: OUTPUT_ASDF'
+  if (ier /= 0) stop 'an error occurred while reading the parameter file: OUTPUT_SEISMOS_3D_ARRAY'
   call read_value_logical(OUTPUT_SEISMOS_HDF5, 'OUTPUT_SEISMOS_HDF5', ier)
-  if (ier /= 0) stop 'an error occurred while reading the parameter file: OUTPUT_3D_ARRAY'
+  if (ier /= 0) stop 'an error occurred while reading the parameter file: OUTPUT_SEISMOS_HDF5'
   call read_value_logical(ROTATE_SEISMOGRAMS_RT, 'ROTATE_SEISMOGRAMS_RT', ier)
   if (ier /= 0) stop 'an error occurred while reading the parameter file: ROTATE_SEISMOGRAMS_RT'
   call read_value_logical(WRITE_SEISMOGRAMS_BY_MAIN, 'WRITE_SEISMOGRAMS_BY_MAIN', ier)

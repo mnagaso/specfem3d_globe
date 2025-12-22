@@ -699,7 +699,13 @@
   write(IOUT) ANISOTROPIC_INNER_CORE
 
   write(IOUT) ATTENUATION
-  write(IOUT) ATTENUATION_3D
+  if (ATTENUATION_3D) then
+    write(IOUT) ATTENUATION_3D
+  else if (ATTENUATION_3D_BERKELEY) then
+    write(IOUT) ATTENUATION_3D_BERKELEY
+  else
+    write(IOUT) ATTENUATION_3D
+  endif
 
   write(IOUT) ELLIPTICITY
   write(IOUT) GRAVITY
@@ -773,13 +779,13 @@
   !
   ! if absorbing_conditions are not set or if NCHUNKS=6, only one mass matrix is needed
   ! for the sake of performance, only "rmassz" array will be filled and "rmassx" & "rmassy" will be fictitious / unused
+  NGLOB_XY_CM = 0
+  NGLOB_XY_IC = 0
 
   if (NCHUNKS /= 6 .and. ABSORBING_CONDITIONS) then
-     NGLOB_XY_CM = NGLOB_REGIONS(IREGION_CRUST_MANTLE)
-  else
-     NGLOB_XY_CM = 0
+    NGLOB_XY_CM = NGLOB_REGIONS(IREGION_CRUST_MANTLE)
   endif
-  NGLOB_XY_IC = 0
+
   if (ROTATION .and. EXACT_MASS_MATRIX_FOR_ROTATION) then
     NGLOB_XY_CM = NGLOB_REGIONS(IREGION_CRUST_MANTLE)
     NGLOB_XY_IC = NGLOB_REGIONS(IREGION_INNER_CORE)
@@ -788,18 +794,10 @@
   write(IOUT) NGLOB_XY_CM
   write(IOUT) NGLOB_XY_IC
 
-  if (ATTENUATION_1D_WITH_3D_STORAGE) then
-    write(IOUT) .true.
-  else
-    write(IOUT) .false.
-  endif
+  write(IOUT) ATTENUATION_1D_WITH_3D_STORAGE
 
   ! for UNDO_ATTENUATION
-  if (UNDO_ATTENUATION) then
-    write(IOUT) .true.
-  else
-    write(IOUT) .false.
-  endif
+  write(IOUT) UNDO_ATTENUATION
   write(IOUT) NT_DUMP_ATTENUATION_optimal
 
   ! mesh geometry (with format specifier to avoid writing double values on a newline)

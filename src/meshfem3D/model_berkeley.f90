@@ -46,6 +46,8 @@
 
 module model_berkeley_par
 
+  use constants, only: A3d_folder  ! Berkeley A3d model folder
+
   implicit none
 
   ! spline arrays
@@ -85,7 +87,7 @@ end module model_berkeley_par
 ! standard routine to setup model
 
   use model_berkeley_par
-  use constants, only: A3d_folder,myrank,IMAIN,EARTH_R_KM,PI
+  use constants, only: myrank,IMAIN,EARTH_R_KM,PI
 
   implicit none
 
@@ -96,9 +98,9 @@ end module model_berkeley_par
   double precision :: theta,phi
   character :: trash
 
-  character(len=100), parameter :: A3d_dat            = trim(A3d_folder) // 'A3d.dat'
-  character(len=100), parameter :: hknots_dat         = trim(A3d_folder) // 'hknots.dat'
-  character(len=100), parameter :: hknots2_dat        = trim(A3d_folder) // 'hknots2.dat'
+  character(len=*), parameter :: A3d_dat            = trim(A3d_folder) // 'A3d.dat'
+  character(len=*), parameter :: hknots_dat         = trim(A3d_folder) // 'hknots.dat'
+  character(len=*), parameter :: hknots2_dat        = trim(A3d_folder) // 'hknots2.dat'
 
   double precision, parameter :: deg2rad = PI / 180.d0
 
@@ -111,7 +113,7 @@ end module model_berkeley_par
   ! determine moho radius from 1D reference model
   if (myrank == 0) then
     ! gets exact 1D moho radius (in km)
-    call determine_1dberkeley_moho_radius(moho1D_radius)
+    call get_1dberkeley_moho_radius(moho1D_radius)
 
     ! adjust radius slightly to be in mantle
     moho1D_radius = moho1D_radius - 0.1d0

@@ -225,9 +225,15 @@
   character(len=3),dimension(NDIM) :: comp
   character(len=MAX_STRING_LEN) :: filename, path_to_add
   character(len=MAX_STRING_LEN) :: adj_source_name
+  ! band code
   character(len=2) :: bic
+  double precision :: sampling_rate
 
-  call band_instrument_code(DT,bic)
+  ! get band code
+  sampling_rate = DT    ! requires sampling rate == DT, not DT * NTSTEP_BETWEEN_OUTPUT_SAMPLE, since we won't interpolate
+  call band_instrument_code(sampling_rate,bic)
+
+  ! component names
   comp(1) = bic(1:2)//'N'
   comp(2) = bic(1:2)//'E'
   comp(3) = bic(1:2)//'Z'
@@ -348,7 +354,6 @@
         endif
 
         ! reads in adjoint source trace
-        !read(IIN_ADJ,*,iostat=ier) junk, adj_src(icomp,itime-index_start+1)
         read(IIN_ADJ,*,iostat=ier) junk, adj_src(icomp,index_i)
 
         if (ier /= 0) then

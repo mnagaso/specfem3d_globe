@@ -32,6 +32,11 @@ module combine_vol_data_adios_mod
 
   implicit none
 
+  ! member variables
+  public
+  logical is_forward ! forward array
+  logical is_undo !
+
 contains
 
 !=============================================================================
@@ -52,6 +57,7 @@ subroutine print_usage_adios()
   print *, '   output_dir   - indicates where var_name.vtk will be written'
   print *, '   high/low res - give 0 for low resolution and 1 for high resolution'
   print *, '   region       - (optional) region number, only use 1 == crust/mantle, 2 == outer core, 3 == inner core'
+  print *, '   iter         - (optional) iteration number'
   print *
 
   stop ' Reenter command line options'
@@ -62,22 +68,24 @@ end subroutine print_usage_adios
 !> Interpret command line arguments
 
 subroutine read_args_adios(arg, var_name, value_file_name, mesh_file_name, slice_list_name, &
-                           outdir, ires, iregion)
+                           outdir, ires, iregion, iiter)
 
   use constants, only: IIN,MAX_STRING_LEN
 
   implicit none
   ! Arguments
   character(len=*), intent(in) :: arg(:)
-  integer, intent(out) :: ires, iregion
+  integer, intent(out) :: ires, iregion, iiter
   character(len=*), intent(out) :: var_name, value_file_name, mesh_file_name, &
                                    outdir, slice_list_name
 
   ! initializes
   iregion = 0
+  iiter = 0
 
   ! gets arguments
-  if ((command_argument_count() == 6) .or. (command_argument_count() == 7)) then
+  if ((command_argument_count() == 6) .or. (command_argument_count() == 7) &
+                                      .or. (command_argument_count() == 8)) then
     slice_list_name = arg(1)
     var_name = arg(2)
     value_file_name = arg(3)
@@ -87,8 +95,13 @@ subroutine read_args_adios(arg, var_name, value_file_name, mesh_file_name, slice
   else
     call print_usage_adios()
   endif
-  if (command_argument_count() == 7) then
+
+  if ((command_argument_count() >= 7)) then
     read(arg(7),*) iregion
+  endif
+
+  if ((command_argument_count() == 8)) then
+    read(arg(8),*) iiter
   endif
 
   !debug
@@ -101,15 +114,30 @@ end subroutine read_args_adios
 !=============================================================================
 !> Open ADIOS value and mesh files, read mode
 
-subroutine init_adios(value_file_name, mesh_file_name)
+subroutine init_adios(value_file_name, mesh_file_name, i_iter)
+  use constants, only: ADIOS_SAVE_ALL_SNAPSHOTS_IN_ONE_FILE
 
   implicit none
   ! Parameters
   character(len=*), intent(in) :: value_file_name, mesh_file_name
+  integer, intent(in) :: i_iter
 
   ! debug
   logical, parameter :: DEBUG = .false.
   integer :: nglob,nspec
+
+  if (i_iter >= 0) then
+    is_forward = .true.
+    ! if file name contains "undoatt" then it is an undo array
+    if (index(value_file_name, "undoatt") > 0) then
+      is_undo = .true.
+    else
+      is_undo = .false.
+    endif
+    ! print if it is a forward array and undo array
+    print * , 'is_forward = ',is_forward
+    print * , 'is_undo = ',is_undo
+  endif
 
   ! initializes adios
   call initialize_adios()
@@ -119,7 +147,17 @@ subroutine init_adios(value_file_name, mesh_file_name)
   call open_file_adios_read_and_init_method(myadios_file,myadios_group,mesh_file_name)
 
   ! opens second adios file for reading data values
-  call init_adios_group(myadios_val_group,"ValReader")
+  if (.not. is_undo) then
+    call init_adios_group(myadios_val_group,"ValReader")
+  else
+    if (.not. ADIOS_SAVE_ALL_SNAPSHOTS_IN_ONE_FILE) then
+      ! not supported
+      stop 'Error: adios save all snapshots in one file not supported'
+    else
+      ! undoatt file
+      call init_adios_group_undo_att(myadios_val_group,"SPECFEM3D_GLOBE_FORWARD_ARRAYS_UNDOATT")
+    endif
+  endif
   call open_file_adios_read(myadios_val_file,myadios_val_group,value_file_name)
 
   ! debug output list variables and attributs in mesh file
@@ -254,15 +292,17 @@ end subroutine read_coordinates_adios_mesh
 !=============================================================================
 !> reads in data from ADIOS value file
 
-subroutine read_values_adios(var_name, iproc, ir, nspec, data)
+subroutine read_values_adios(var_name, iproc, ir, i_iter, ires, nglob, nspec, ibool, data)
 
-  use constants, only: CUSTOM_REAL,NGLLX,NGLLY,NGLLZ,IREGION_CRUST_MANTLE,IREGION_INNER_CORE,IREGION_OUTER_CORE
+  use constants, only: CUSTOM_REAL,NGLLX,NGLLY,NGLLZ,NDIM,IREGION_CRUST_MANTLE,IREGION_INNER_CORE,IREGION_OUTER_CORE
 
   implicit none
   ! Parameters
   character(len=*), intent(in) :: var_name
-  integer, intent(in) :: iproc, ir, nspec
+  integer, intent(in) :: iproc, ir, i_iter, ires, nspec, nglob
+  integer, dimension(:,:,:,:), intent(in) :: ibool
   real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ,nspec), intent(inout) :: data
+  real(kind=CUSTOM_REAL), dimension(:,:), allocatable :: data_tmp ! used for reading forward arrays
   ! Variables
   integer(kind=8), dimension(1) :: start, count
   integer(kind=8) :: sel
@@ -270,14 +310,20 @@ subroutine read_values_adios(var_name, iproc, ir, nspec, data)
   character(len=128) :: data_name
   character(len=8) :: reg_name
   logical :: is_kernel
+  integer :: iexist
+  integer :: di, dj, dk, i, j, k, ispec, iglob
 
-  ! note: we can either visualize
+  ! note: we can  visualize
   !         wavespeed arrays (in DATABASES_MPI/model_gll.bp)
   !                          (e.g. rho,vp,vs,vph,vpv,vsh,..)
   !       or
   !         sensitivity kernels (in OUTPUT_FILES/kernels.bp)
   !                             (e.g. rho_kl,alpha_kl,beta_kl,alphah_kl,alphav_kl,betah_kl,..)
-  !
+  !       or
+  !         forward arrays (in DATABASES_MPI/save_forward_arrays.pb) *only with adios
+  !         (e.g. rho_forward,alpha_forward,beta_forward,alphah_forward,alphav_forward,betah_forward,..)
+  !       or
+  !         undo arrays (in DATABASES_MPI/save_forward_arrays_undoatt.bp) *only with adios
   !       unfortunately, they have different naming conventions for different Earth regions:
   !        - wavespeed arrays: reg1/vp/, reg2/vp/, reg3/vp/, ..
   !        - kernels: alpha_kl_crust_mantle/, alpha_kl_outer_core/, alpha_kl_inner_core/,..
@@ -285,6 +331,8 @@ subroutine read_values_adios(var_name, iproc, ir, nspec, data)
   ! i.e. if the ending is "_kl" we assume it is a kernel name
   !
   is_kernel = .false.
+
+  ! check if the variable name is a kernel name
   ! example: alpha_kl checks ending '_kl'
   if (len_trim(var_name) > 3) then
     if (var_name(len_trim(var_name)-2:len_trim(var_name)) == '_kl') then
@@ -296,6 +344,12 @@ subroutine read_values_adios(var_name, iproc, ir, nspec, data)
     if (var_name(len_trim(var_name)-15:len_trim(var_name)) == '_kl_crust_mantle') then
       is_kernel = .true.
     endif
+  endif
+
+  ! verify if i_iter is not negative for is_forward
+  if (is_forward .and. i_iter < 0) then
+    print *,'Error: i_iter is negative for forward array'
+    stop 'Error: i_iter is negative for forward array'
   endif
 
   ! determines full data array name
@@ -322,6 +376,41 @@ subroutine read_values_adios(var_name, iproc, ir, nspec, data)
       data_name = trim(var_name)
     endif
     print *,'  kernel data name: ',trim(data_name)
+  else if (is_forward) then
+    ! expeting var_name = "R_**", "accel", "veloc" or "displ"
+    ! stop if the name is not correct
+    if (index(var_name, "R_") == 0 .and. index(var_name, "accel") == 0 .and. &
+        index(var_name, "veloc") == 0 .and. index(var_name, "displ") == 0) then
+      print *,'Error: undo array name is not correct'
+      stop 'Error: undo array name is not correct'
+    endif
+
+    select case (ir)
+    case (IREGION_CRUST_MANTLE)
+      data_name = trim(var_name) // "_crust_mantle"
+    case (IREGION_OUTER_CORE)
+      data_name = trim(var_name) // "_outer_core"
+    case (IREGION_INNER_CORE)
+      data_name = trim(var_name) // "_inner_core"
+    case default
+      stop 'Error wrong region code in read_values_adios() routine'
+    end select
+
+    if (ires == 1) then ! high resolution
+      ! set increments
+      di = 1
+      dj = 1
+      dk = 1
+    else if (ires == 2) then ! mid. resolution
+      di = int((NGLLX-1)/2.0)
+      dj = int((NGLLY-1)/2.0)
+      dk = int((NGLLZ-1)/2.0)
+    else ! high resolution
+      di = NGLLX - 1
+      dj = NGLLY - 1
+      dk = NGLLZ - 1
+    endif
+
   else
     ! for wavespeed name: rho,vp,..
     ! adds region name: var_name = "rho" -> reg1/rho
@@ -331,10 +420,27 @@ subroutine read_values_adios(var_name, iproc, ir, nspec, data)
   endif
 
   ! gets data values
-  if (.true.) then
-    ! default
+  if (is_forward) then
+    ! allocate data_tmp
+    allocate(data_tmp(NDIM,nglob))
+
     ! assumes GLL type array size (NGLLX,NGLLY,NGLLZ,nspec)
-    call read_adios_array(myadios_val_file,myadios_val_group,iproc,nspec,trim(data_name),data)
+    call read_adios_array_gll_check_forward(myadios_val_file,myadios_val_group,iproc,nglob,&
+                                            trim(data_name),data_tmp,iexist,int(i_iter, kind=8))
+
+    ! recompose the array from glob based to GLL based
+    ! data_tmp -> data
+    do ispec = 1, nspec
+      do k = 1,NGLLZ, dk
+        do j = 1,NGLLY, dj
+          do i = 1,NGLLX, di
+            iglob = ibool(i,j,k,ispec)
+            data(i,j,k,ispec) = data_tmp(3,iglob) ! z coordinate for now
+          end do
+        end do
+      end do
+    end do
+    deallocate(data_tmp)
   else
     ! reads in data offset
     call read_adios_scalar(myadios_val_file,myadios_val_group,iproc,trim(data_name) // "/offset",offset)

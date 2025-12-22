@@ -3,7 +3,7 @@
  *** Specfem3D MPI Mesher ***
  ****************************
 
- Version: 8.0.0
+ Version: 8.1.1
 
 
  Planet: Earth
@@ -44,9 +44,10 @@
    no inner-core anisotropy
    no general mantle anisotropy
 
+
  Reference radius of the globe used is    6371.0000000000000       km
 
- Central cube is at a radius of    932.00000000000000       km
+ Central cube is at a radius of    952.00000000000000       km
  creating global slice addressing
 
 
@@ -56,7 +57,7 @@
 
    topography/bathymetry: min/max =        -7747        5507
 
-   Elapsed time for reading in seconds =    8.4950000000000012E-002
+   Elapsed time for reading in seconds =    5.1342000000000006E-002
 
 
    VTK topo output: topo resolution in minutes =    4.00000000
@@ -65,10 +66,10 @@
                     full globe NLAT =         2700
                                NLON =         5400
                                total number of points NLAT x NLON =     14580000
-                    limiting output to samples per degree         =            2
+                    limiting output to samples per degree         =            4
 
    elevations written to file: ./DATABASES_MPI/mesh_topo_bathy.vtk
-   min/max =   -7.62056255     /   5.49393749     (km)
+   min/max =   -7.71626568     /   5.49881268     (km)
 
  broadcast model: EMC model
    file   : ./DATA/IRIS_EMC/model.nc
@@ -81,6 +82,10 @@
             depth     min/max =    0.00000000     /   144.000000     (km)
             regional model
 
+            using interpolated velocities for missing values
+            extending model range (laterally & vertically)
+            using taper for outside points
+
             model (vp,vs,rho) is complete
 
    grid   : lat  min/max =    50.0000000     /   75.0000000
@@ -88,18 +93,24 @@
             dep  min/max =    0.00000000     /   144.000000
 
             regular grid lat/lon/dep =  T / T / F
-            increments dlat =   0.100000001
             increments dlon =   0.200000003
+            increments dlat =   0.100000001
             increments ddep = variable (  0.250000000     ,..)
 
             depth reference level: earth surface
 
-   size   : number of points lat               =          251
-            number of points lon               =          301
-            number of points dep               =          156
+   order  : lon id            1  array index =            2
+            lat id            2  array index =            1
+            dep id            3  array index =            3
 
-            array dimensions nx/ny/nz          =          301 /         251 /         156
-            array memory required per process  =    134.879562     MB
+   size   : number of points lat         =          251
+            number of points lon         =          301
+            number of points dep         =          156
+
+            array dimensions nx/ny/nz    =          301         251         156
+            memory required per process  =    134.879562     MB
+
+   scaling: no scaling needed, all parameters provided
 
    model  : vp  min/max =    1.90540004     /   9.56910038
             vs  min/max =   0.488099992     /   5.34880018
@@ -108,13 +119,41 @@
             number of missing/incomplete model points is      8758308  out of     11785956
                                                             74.3113937     %
 
-   simulation chunk setup:
-     center (lat,lon) at : (   64.0000000      -150.000000     ) geocentric
+   simulation chunk:
+     center (lat,lon) at : (   64.0000000      -150.000000     )
      rotation            :    20.0000000
      width eta/xi        :    25.0000000       30.0000000
 
-     corners (lat,lon) at: (   46.6368103      -163.957794     ),(   53.3719826      -118.907059     )
-                           (   63.9481773       165.510025     ),(   76.7717819      -103.802673     ) geographic
+     corners (lat,lon) at: (   46.4901505       196.080399     ),(   53.2427101       240.989029     )
+                           (   63.8405838       165.724365     ),(   76.6673431       255.739944     ) geographic
+
+   reordering:
+     current indexing: lon/lat/depth ids =            1           2           3
+                                 var ids =            2           1           3
+                 dimensions nx / ny / nz =          301         251         156
+
+     new     indexing: lon/lat/depth ids =            1           2           3
+                 dimensions nx / ny / nz =          301         251         156
+                 lon ordering  :    dlon =   0.200000003
+                 lat ordering  :    dlat =   0.100000001
+                 depth ordering:    ddep =   0.250000000
+
+   EMC model 1D depth average:
+     written to: ./OUTPUT_FILES//EMC_model_1D_depth_average.dat
+
+   filling:
+     using interpolated closest model values for missing values
+     interpolation method :            1 (1 == Shepard/2 == nearest/3 == bilinear)
+
+     number of updated values =      8758308
+     vp  min/max =    1905.40002     /   9569.10059     (m/s)
+     vs  min/max =    488.100006     /   5348.80029     (m/s)
+     rho min/max =    2050.80005     /   3886.00000     (kg/m^3)
+
+   taper : horizontal taper distance (in deg) :    5.0000000000000000      (deg)
+           vertical   taper distance (in km)  :    50.000000000000000      (km)
+
+           estimated element size (at surface)          :   0.93749999999999989      (deg)
 
  attenuation model:
    1D reference model
@@ -151,7 +190,7 @@
    NER_TOP_CENTRAL_CUBE_ICB:           0
    SUPPRESS_CRUSTAL_MESH:    F
 
-   R_CENTRAL_CUBE =    932.000000      km
+   R_CENTRAL_CUBE =    952.000000      km
 
  Mesh resolution:
    DT =    5.0000000000000003E-002
@@ -186,14 +225,14 @@
    creating layer            1 out of            3
      number of regular elements  =           96
      number of doubling elements =          128
-     33.3%    current clock (NOT elapsed) time is: 13h 58min 39sec
+     33.3%    current clock (NOT elapsed) time is: 18h 33min 15sec
    creating layer            2 out of            3
      number of regular elements  =           64
      number of doubling elements =          512
-     66.7%    current clock (NOT elapsed) time is: 13h 58min 39sec
+     66.7%    current clock (NOT elapsed) time is: 18h 33min 15sec
    creating layer            3 out of            3
      number of regular elements  =          256
-    100.0%    current clock (NOT elapsed) time is: 13h 58min 39sec
+    100.0%    current clock (NOT elapsed) time is: 18h 33min 15sec
    layers done
 
    number of elements (per slice)        =         1056
@@ -202,7 +241,7 @@
 
    ...creating global addressing
      total number of points            :       132000
-     array memory required per process :    1.0070800781250000      MB
+     array memory required per process :    3.02124023     MB
      getting global points             : npointot =       132000  nspec =         1056
      creating indirect addressing
      ibool ok
@@ -219,14 +258,14 @@
    creating layer            1 out of            3
      number of regular elements  =           96
      number of doubling elements =          128
-     33.3%    current clock (NOT elapsed) time is: 13h 58min 39sec
+     33.3%    current clock (NOT elapsed) time is: 18h 33min 15sec
    creating layer            2 out of            3
      number of regular elements  =           64
      number of doubling elements =          512
-     66.7%    current clock (NOT elapsed) time is: 13h 58min 39sec
+     66.7%    current clock (NOT elapsed) time is: 18h 33min 15sec
    creating layer            3 out of            3
      number of regular elements  =          256
-    100.0%    current clock (NOT elapsed) time is: 13h 58min 39sec
+    100.0%    current clock (NOT elapsed) time is: 18h 33min 15sec
    layers done
 
    number of elements (per slice)        =         1056
@@ -242,22 +281,22 @@
  ----------------------------------
    Region is crust/mantle
 
-   Min Vs =   0.829714894      (km/s)
-   Max Vp =    8.55003834      (km/s)
+   Min Vs =   0.714891016      (km/s)
+   Max Vp =    8.56700611      (km/s)
 
-   Max element edge size =    411.768768      (km)
-   Min element edge size =    4.85114288      (km)
-   Max/min ratio =    84.8807755
+   Max element edge size =    411.771698      (km)
+   Min element edge size =    4.84721994      (km)
+   Max/min ratio =    84.9500732
 
-   Max Jacobian eigenvalue ratio =   0.148878485
-   Min Jacobian eigenvalue ratio =    5.12770517E-03
+   Max Jacobian eigenvalue ratio =   0.148860648
+   Min Jacobian eigenvalue ratio =    7.33555155E-03
 
-   Minimum period resolved =    15.0369892      (s)
+   Minimum period resolved =    17.4454479      (s)
    Minimum period resolved (empirical) =    38.6093483      (s)
-   Maximum suggested time step =    5.64999990E-02  (s)
+   Maximum suggested time step =    6.04999997E-02  (s)
 
    for DT :    5.00000007E-02  (s)
-   Max stability for wave velocities =   0.484120220
+   Max stability for wave velocities =   0.453007847
  ----------------------------------
 
    saving vtk mesh files for resolution res_minimum_period...
@@ -302,30 +341,51 @@
 
    ...element inner/outer separation
 
- for overlapping of communications with calculations:
+   for overlapping of communications with calculations:
+   percentage of edge elements in crust/mantle    20.0757580     %
+   percentage of volume elements in crust/mantle    79.9242401     %
 
- percentage of edge elements in crust/mantle    20.0757580     %
- percentage of volume elements in crust/mantle    79.9242401     %
 
-
-   ...element mesh coloring
-   mesh coloring:  F
+   ...element mesh permutation
 
    ...creating absorbing boundary arrays
 
    ...creating mass matrix
-     updates mass matrix with Stacey boundary corrections
-     updates mass matrix with ocean load
+      updates mass matrix with Stacey boundary corrections
+      updates mass matrix with ocean load
+        using minimum ocean thickness:    50.000000000000000      (m)
 
    ...saving binary files
 
    ...saving mesh files
 
- calculated region volume:    6.75710896E-03
-                 top area:   0.223485395
-              bottom area:   0.209725976
+ calculated region volume:    6.75668987E-03
+                 top area:   0.223487124
+              bottom area:   0.209728673
 
- calculated volume:    6.7571089477372302E-003
+ *******************************************
+ creating mesh in region            2
+ this region is the outer core
+ *******************************************
+
+ region is empty, skipping this one..
+
+
+ *******************************************
+ creating mesh in region            3
+ this region is the inner core
+ *******************************************
+
+ region is empty, skipping this one..
+
+
+ all mesh regions created - done
+
+ *******************************************
+
+ finalizing simulation:
+
+ calculated volume:    6.7566899692832636E-003
 
  Repartition of elements in regions:
  ----------------------------------
@@ -333,9 +393,9 @@
  number of elements in each slice      :         1056
  total number of elements in all slices:         4224
 
-  - crust and mantle:    100.000000      %
-  - outer core:    0.00000000      %
-  - inner core:    0.00000000      %
+  - crust and mantle       :    100.000000      %
+  - outer core             :    0.00000000      %
+  - inner core             :    0.00000000      %
 
  for some mesh statistics, see comments in file OUTPUT_FILES/values_from_mesher.h
 
@@ -349,8 +409,8 @@
  smallest and largest possible floating-point numbers are:    1.17549435E-38   3.40282347E+38
 
 
- Elapsed time for mesh generation and buffer creation in seconds =    1.24852097
- Elapsed time for mesh generation and buffer creation in hh:mm:ss =    0 h 00 m 01 s
+ Elapsed time for mesh generation and buffer creation in seconds =    7.96033096
+ Elapsed time for mesh generation and buffer creation in hh:mm:ss =    0 h 00 m 07 s
 
  End of mesh generation
 

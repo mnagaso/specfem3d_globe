@@ -56,12 +56,12 @@
     REFERENCE_1D_MODEL,REFERENCE_CRUSTAL_MODEL, &
     THREE_D_MODEL,THREE_D_MODEL_IC, &
     MODEL_GLL,MODEL_GLL_TYPE, &
-    ANISOTROPIC_3D_MANTLE,ANISOTROPIC_INNER_CORE,ATTENUATION_3D, &
+    ANISOTROPIC_3D_MANTLE,ANISOTROPIC_INNER_CORE,ATTENUATION_3D,ATTENUATION_3D_BERKELEY, &
     ATTENUATION_GLL, CASE_3D,CRUSTAL,HETEROGEN_3D_MANTLE, &
     HONOR_1D_SPHERICAL_MOHO, MODEL_3D_MANTLE_PERTUBATIONS, &
     ONE_CRUST, TRANSVERSE_ISOTROPY, OCEANS,TOPOGRAPHY, &
     CEM_REQUEST,CEM_ACCEPT, &
-    EMC_MODEL
+    EMC_MODEL,EMC_MODEL_TISO,EMC_MODEL_QMU
 
   implicit none
 
@@ -266,6 +266,7 @@
 
   ! uses 1D attenuation model by default
   ATTENUATION_3D = .false.
+  ATTENUATION_3D_BERKELEY = .false.
 
   ! no crustal mesh stretching and 3D crust models by default
   CASE_3D = .false.
@@ -288,6 +289,8 @@
 
   ! no EMC model by default
   EMC_MODEL = .false.
+  EMC_MODEL_TISO = .false.
+  EMC_MODEL_QMU = .false.
 
   ! no 3D model by default
   THREE_D_MODEL = 0
@@ -747,12 +750,20 @@
 #ifdef USE_EMC
   case ('emc_model')
     EMC_MODEL           = .true.
-    TRANSVERSE_ISOTROPY = .false. ! enforces isotropic model - for now, tiso models are not supported yet...
+    TRANSVERSE_ISOTROPY = .false. ! enforces isotropic model
+  case ('emc_model_qmu')
+    EMC_MODEL           = .true.
+    EMC_MODEL_QMU       = .true.  ! uses Qmu from EMC model
+    TRANSVERSE_ISOTROPY = .false. ! enforces isotropic model
   case ('emc_model_tiso')
     EMC_MODEL           = .true.
-    TRANSVERSE_ISOTROPY = .true.
-    ! tiso models are not supported yet...
-    stop 'EMC models with transverse isotropy are not supported yet!'
+    EMC_MODEL_TISO      = .true.  ! uses tiso parameterization from EMC model
+    TRANSVERSE_ISOTROPY = .true.  ! uses tiso
+  case ('emc_model_tiso_qmu')
+    EMC_MODEL           = .true.
+    EMC_MODEL_TISO      = .true.  ! uses tiso parameterization from EMC model
+    EMC_MODEL_QMU       = .true.  ! uses Qmu from EMC model
+    TRANSVERSE_ISOTROPY = .true.  ! uses tiso
 #else
   case ('emc_model')
     print *,'Error model ',trim(MODEL),': package compiled without EMC model support.'
@@ -785,6 +796,18 @@
     ONE_CRUST = .true.
     TRANSVERSE_ISOTROPY = .true.                  ! uses tiso parameterization
     MODEL_3D_MANTLE_PERTUBATIONS = .true.         ! uses 3d mantle perturbations
+    THREE_D_MODEL = THREE_D_MODEL_BERKELEY
+    REFERENCE_1D_MODEL = REFERENCE_MODEL_SEMUCB   ! uses berkeley 1D reference
+    REFERENCE_CRUSTAL_MODEL = ICRUST_BERKELEY     ! uses berkeley crust
+
+  case('semucb_a3d_3dq')
+    ! SEMUCB Berkeley model with 3D Q model added
+    CASE_3D = .true.                              ! moho stretching
+    CRUSTAL = .true.                              ! berkeley crustal model will be used
+    ONE_CRUST = .true.
+    TRANSVERSE_ISOTROPY = .true.                  ! uses tiso parameterization
+    ATTENUATION_3D_BERKELEY = .true.              ! uses 3D attenuation model
+    MODEL_3D_MANTLE_PERTUBATIONS = .true.         ! uses 3d mantle perturbations (elastic)
     THREE_D_MODEL = THREE_D_MODEL_BERKELEY
     REFERENCE_1D_MODEL = REFERENCE_MODEL_SEMUCB   ! uses berkeley 1D reference
     REFERENCE_CRUSTAL_MODEL = ICRUST_BERKELEY     ! uses berkeley crust
@@ -1190,7 +1213,8 @@
     RHO_TOP_OC,RHO_BOTTOM_OC,RHO_OCEANS
 
   use shared_parameters, only: &
-    HONOR_1D_SPHERICAL_MOHO,CASE_3D,CRUSTAL,REFERENCE_1D_MODEL
+    HONOR_1D_SPHERICAL_MOHO,CASE_3D,CRUSTAL,REFERENCE_1D_MODEL, &
+    NCHUNKS,NEX_XI,NEX_ETA
 
   ! reference models
   use model_prem_par
@@ -1439,17 +1463,17 @@
     ! (same as values in model_ccrem.f90)
     CCREM_RSURFACE = R_PLANET
     ROCEAN = CCREM_RSURFACE   ! no ocean
-    RMIDDLE_CRUST = CCREM_RSURFACE - 20000.d0 ! depth = 20 km
-    RMOHO = CCREM_RSURFACE - 35000.d0         ! depth = 35 km
-    R80  = CCREM_RSURFACE - 80000.d00         ! depth = 80 km
-    R220 = CCREM_RSURFACE - 220000.d0          ! depth = 220 km
-    R400 = CCREM_RSURFACE - 410000.d0          ! depth = 410 km - CCREM depth 410km discontinuity
-    R600 = CCREM_RSURFACE - 600000.d0          ! depth = 600 km
-    R670 = CCREM_RSURFACE - 660000.d0          ! depth = 660 km - CCREM depth 660km discontinuity
-    R771 = CCREM_RSURFACE - 771000.d0          ! depth = 771 km (PREM)
+    RMIDDLE_CRUST = CCREM_RSURFACE - 20000.d0   ! depth = 20 km
+    RMOHO = CCREM_RSURFACE - 35000.d0           ! depth = 35 km
+    R80  = CCREM_RSURFACE - 80000.d00           ! depth = 80 km
+    R220 = CCREM_RSURFACE - 220000.d0           ! depth = 220 km
+    R400 = CCREM_RSURFACE - 410000.d0           ! depth = 410 km - CCREM depth 410km discontinuity
+    R600 = CCREM_RSURFACE - 600000.d0           ! depth = 600 km
+    R670 = CCREM_RSURFACE - 660000.d0           ! depth = 660 km - CCREM depth 660km discontinuity
+    R771 = CCREM_RSURFACE - 771000.d0           ! depth = 771 km (PREM)
     RTOPDDOUBLEPRIME = CCREM_RSURFACE - 2741000.d0 ! depth = 2741 km (PREM)
-    RCMB = CCREM_RSURFACE - 2891000.d0         ! depth = 2891 km (PREM)
-    RICB = CCREM_RSURFACE - 5153500.d0         ! depth = 5153.5 km
+    RCMB = CCREM_RSURFACE - 2891000.d0          ! depth = 2891 km (PREM)
+    RICB = CCREM_RSURFACE - 5153500.d0          ! depth = 5153.5 km
 
     RHO_TOP_OC = 9.9131d0 * 1000.d0 / RHOAV
     RHO_BOTTOM_OC = 12.1478d0 * 1000.d0 / RHOAV
@@ -1457,15 +1481,15 @@
   case (REFERENCE_MODEL_SEMUCB)
     ! Berkeley SEMUCB Model - discontinuities
     ROCEAN = 6368000.d0
-    RMIDDLE_CRUST = 6356000.d0
-    RMOHO = 6341000.d0                        ! moho depth = 30 km
-    R80  = 6291000.d0
-    R120 = -1.d0                              ! no d120 discontinuity, set to fictitious value
-    R220 = 6151000.d0
-    R400 = 5961000.d0
-    R600 = 5771000.d0
-    R670 = 5721000.d0
-    R771 = 5600000.d0
+    RMIDDLE_CRUST = 6356000.d0                  ! depth = 15 km
+    RMOHO = 6341000.d0                          ! moho depth = 30 km
+    R80  = 6291000.d0                           ! depth = 80 km
+    R120 = -1.d0                                ! no d120 discontinuity, set to fictitious value
+    R220 = 6151000.d0                           ! depth = 220 km
+    R400 = 5961000.d0                           ! depth = 410 km
+    R600 = 5771000.d0                           ! depth = 600 km
+    R670 = 5721000.d0                           ! depth = 650 km
+    R771 = 5600000.d0                           ! depth = 771 km
     RTOPDDOUBLEPRIME = 3630000.d0
     RCMB = 3480000.d0
     RICB = 1221500.d0
@@ -1605,6 +1629,14 @@
       ! moves fictitious moho closer to this 1d moho depth
       RMOHO_FICTITIOUS_IN_MESHER = R_PLANET - 29000.000     ! down at  29 km depth
       R80_FICTITIOUS_IN_MESHER = R_PLANET - 130000.000      ! down at 130 km depth
+
+      ! coarse global mesh modification (to allow for small testing examples)
+      ! to avoid Jacobian errors around lat/lon ~ 80 deg / 100 deg due to stretching
+      if (NCHUNKS == 6 .and. min(NEX_XI,NEX_ETA) <= 48) then
+        RMOHO_FICTITIOUS_IN_MESHER = R_PLANET - 35000.000   ! down at  35 km depth
+        R80_FICTITIOUS_IN_MESHER = R_PLANET - 140000.000    ! down at 100 km depth
+      endif
+
     endif
   endif
 

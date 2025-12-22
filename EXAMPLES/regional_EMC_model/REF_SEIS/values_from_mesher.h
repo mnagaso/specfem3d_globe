@@ -45,20 +45,20 @@
  ! angle of rotation of the first chunk =    20.0000000
  !
  ! corner            1
- ! longitude in degrees =   -163.95780150968133
- ! latitude in degrees =    46.636809740502031
+ ! longitude in degrees =    196.08039814141321
+ ! latitude in degrees =    46.490149899962283
  !
  ! corner            2
- ! longitude in degrees =   -118.90706170568004
- ! latitude in degrees =    53.371981420299001
+ ! longitude in degrees =    240.98903375505233
+ ! latitude in degrees =    53.242711274498376
  !
  ! corner            3
- ! longitude in degrees =    165.51003142241825
- ! latitude in degrees =    63.948175763900551
+ ! longitude in degrees =    165.72436180127494
+ ! latitude in degrees =    63.840583252616653
  !
  ! corner            4
- ! longitude in degrees =   -103.80267130025246
- ! latitude in degrees =    76.771785045788704
+ ! longitude in degrees =    255.73994820470622
+ ! latitude in degrees =    76.667344975314407
  !
  ! resolution of the mesh at the surface:
  ! -------------------------------------
@@ -105,10 +105,14 @@
  integer, parameter :: NSPEC_CRUST_MANTLE =         1056
  integer, parameter :: NSPEC_OUTER_CORE =            0
  integer, parameter :: NSPEC_INNER_CORE =            0
+ integer, parameter :: NSPEC_TRINFINITE =            0
+ integer, parameter :: NSPEC_INFINITE =            0
 
  integer, parameter :: NGLOB_CRUST_MANTLE =        72961
  integer, parameter :: NGLOB_OUTER_CORE =            0
  integer, parameter :: NGLOB_INNER_CORE =            0
+ integer, parameter :: NGLOB_TRINFINITE =            0
+ integer, parameter :: NGLOB_INFINITE =            0
 
  integer, parameter :: NSPECMAX_ANISO_IC =            0
 
@@ -131,9 +135,15 @@
  integer, parameter :: NSPEC_CRUST_MANTLE_ADJOINT =            0
  integer, parameter :: NSPEC_OUTER_CORE_ADJOINT =            0
  integer, parameter :: NSPEC_INNER_CORE_ADJOINT =            0
+ integer, parameter :: NSPEC_TRINFINITE_ADJOINT =            0
+ integer, parameter :: NSPEC_INFINITE_ADJOINT =            0
+
  integer, parameter :: NGLOB_CRUST_MANTLE_ADJOINT =            0
  integer, parameter :: NGLOB_OUTER_CORE_ADJOINT =            0
  integer, parameter :: NGLOB_INNER_CORE_ADJOINT =            0
+ integer, parameter :: NGLOB_TRINFINITE_ADJOINT =            0
+ integer, parameter :: NGLOB_INFINITE_ADJOINT =            0
+
  integer, parameter :: NSPEC_OUTER_CORE_ROT_ADJOINT =            0
 
  integer, parameter :: NSPEC_CRUST_MANTLE_STACEY =         1056
@@ -154,6 +164,8 @@
  logical, parameter :: ELLIPTICITY_VAL = .true.
 
  logical, parameter :: GRAVITY_VAL = .true.
+
+ logical, parameter :: FULL_GRAVITY_VAL = .false.
 
  logical, parameter :: OCEANS_VAL = .true.
 
@@ -182,14 +194,27 @@
  integer, parameter :: NSPEC2DMAX_YMIN_YMAX_CM =           96
  integer, parameter :: NSPEC2D_BOTTOM_CM =           16
  integer, parameter :: NSPEC2D_TOP_CM =          256
+
  integer, parameter :: NSPEC2DMAX_XMIN_XMAX_IC =            0
  integer, parameter :: NSPEC2DMAX_YMIN_YMAX_IC =            0
  integer, parameter :: NSPEC2D_BOTTOM_IC =            0
  integer, parameter :: NSPEC2D_TOP_IC =            0
+
  integer, parameter :: NSPEC2DMAX_XMIN_XMAX_OC =            0
  integer, parameter :: NSPEC2DMAX_YMIN_YMAX_OC =            0
  integer, parameter :: NSPEC2D_BOTTOM_OC =            0
  integer, parameter :: NSPEC2D_TOP_OC =            0
+
+ integer, parameter :: NSPEC2DMAX_XMIN_XMAX_TRINF =            0
+ integer, parameter :: NSPEC2DMAX_YMIN_YMAX_TRINF =            0
+ integer, parameter :: NSPEC2D_BOTTOM_TRINF =            0
+ integer, parameter :: NSPEC2D_TOP_TRINF =            0
+
+ integer, parameter :: NSPEC2DMAX_XMIN_XMAX_INF =            0
+ integer, parameter :: NSPEC2DMAX_YMIN_YMAX_INF =            0
+ integer, parameter :: NSPEC2D_BOTTOM_INF =            0
+ integer, parameter :: NSPEC2D_TOP_INF =            0
+
  integer, parameter :: NSPEC2D_MOHO =            1
  integer, parameter :: NSPEC2D_400 =            1
  integer, parameter :: NSPEC2D_670 =            1
@@ -206,10 +231,10 @@
 
  logical, parameter :: ATTENUATION_1D_WITH_3D_STORAGE_VAL = .true.
 
- logical, parameter :: FORCE_VECTORIZATION_VAL = .false.
+ logical, parameter :: FORCE_VECTORIZATION_VAL = .true.
 
- logical, parameter :: UNDO_ATTENUATION_VAL = .false.
- integer, parameter :: NT_DUMP_ATTENUATION_VAL =         4043
+ logical, parameter :: UNDO_ATTENUATION_VAL = .true.
+ integer, parameter :: NT_DUMP_ATTENUATION_VAL =          916
 
  double precision, parameter :: ANGULAR_WIDTH_ETA_IN_DEGREES_VAL =    25.000000
  double precision, parameter :: ANGULAR_WIDTH_XI_IN_DEGREES_VAL =    30.000000

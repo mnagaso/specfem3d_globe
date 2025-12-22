@@ -566,7 +566,7 @@
     write(IMAIN,*) '  maximum neighbors found per element = ',num_neighbors_max,'(should be 37 for globe meshes)'
     write(IMAIN,*) '  total number of neighbors           = ',num_neighbors_all
     write(IMAIN,*)
-    write(IMAIN,*) '  Elapsed time for detection of neighbors in seconds = ',tCPU
+    write(IMAIN,*) '  Elapsed time for detection of neighbors in seconds = ',sngl(tCPU)
     write(IMAIN,*)
     call flush_IMAIN()
   endif
@@ -772,25 +772,23 @@
       select case(force_stf(isource))
       case (0)
         ! Gaussian source time function
-        t0 = min(t0,1.5d0 * (tshift_src(isource) - hdur(isource)))
+        t0 = min(t0,(tshift_src(isource) - 1.5d0 * hdur(isource)))
       case (1)
         ! Ricker source time function
-        t0 = min(t0,1.2d0 * (tshift_src(isource) - 1.0d0/hdur(isource)))
+        t0 = min(t0,(tshift_src(isource) - 1.2d0 * 1.0d0/hdur(isource)))
       case (2)
         ! Heaviside
-        t0 = min(t0,1.5d0 * (tshift_src(isource) - hdur(isource)))
+        t0 = min(t0,(tshift_src(isource) - 1.5d0 * hdur(isource)))
       case (3)
         ! Monochromatic
         t0 = 0.d0
       case (4)
         ! Gaussian source time function by Meschede et al. (2011)
-        t0 = min(t0,1.5d0 * (tshift_src(isource) - hdur(isource)))
+        t0 = min(t0,(tshift_src(isource) - 1.5d0 * hdur(isource)))
       case default
         stop 'unsupported force_stf value!'
       end select
     enddo
-    ! start time defined as positive value, will be subtracted
-    t0 = - t0
   else
     ! moment tensors
     if (USE_MONOCHROMATIC_CMT_SOURCE) then
@@ -798,9 +796,12 @@
       t0 = 0.d0
     else
       ! (based on Heaviside functions)
-      t0 = - 1.5d0 * minval( tshift_src(:) - hdur(:) )
+      t0 = minval( tshift_src(:) - 1.5d0 * hdur(:) )
     endif
   endif
+
+  ! start time defined as positive value, will be subtracted
+  t0 = - t0
 
   ! uses an external file for source time function, which starts at time 0.0
   if (EXTERNAL_SOURCE_TIME_FUNCTION) then
@@ -818,6 +819,15 @@
       t0 = 0.d0
     endif
   endif
+
+  ! Sine-squared STF
+  if (USE_SINSQ_STF) then
+    t0 = 0.d0
+    if(NSOURCES > 1) write(*,*)'WARNING: USE_SINSQ_STF not tested for NSOURCES > 1'
+    do isource = 1,NSOURCES
+      t0 = - min(t0,tshift_src(isource) - hdur(isource))
+    enddo 
+  endif 
 
   ! checks if user set USER_T0 to fix simulation start time
   ! note: USER_T0 has to be positive
@@ -1743,6 +1753,12 @@
     if (SIMULATION_TYPE == 1 .or. SIMULATION_TYPE == 3) then
       allocate(seismograms(NDIM,nrec_local,nlength_seismogram),stat=ier)
       if (ier /= 0) stop 'Error while allocating seismograms'
+
+      if (FULL_GRAVITY_VAL) then 
+        allocate(seismograms_a(NDIM,nrec_local,nlength_seismogram),stat=ier)
+        if (ier /= 0) stop 'Error while allocating seismograms_a'
+      endif
+
     else
       ! adjoint seismograms
       allocate(seismograms(NDIM*NDIM,nrec_local,nlength_seismogram),stat=ier)
@@ -1763,6 +1779,9 @@
 
     ! initializes seismograms
     seismograms(:,:,:) = 0._CUSTOM_REAL
+    if (FULL_GRAVITY_VAL) then 
+      seismograms_a(:,:,:) = 0._CUSTOM_REAL
+    endif 
 
   else
     ! dummy arrays

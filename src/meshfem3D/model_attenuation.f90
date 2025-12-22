@@ -121,7 +121,7 @@
 
   use constants, only: N_SLS,myrank,IMAIN
 
-  use shared_parameters, only: ATT_F_C_SOURCE,ATTENUATION_GLL,ATTENUATION_3D
+  use shared_parameters, only: ATT_F_C_SOURCE,ATTENUATION_GLL,ATTENUATION_3D,ATTENUATION_3D_BERKELEY
   use regions_mesh_par2, only: tau_s_store
 
   implicit none
@@ -133,9 +133,12 @@
       write(IMAIN,*) '  GLL model'
     else if (ATTENUATION_3D) then
       write(IMAIN,*) '  3D model'
+    else if (ATTENUATION_3D_BERKELEY) then
+      write(IMAIN,*) '  3D Berkeley model'
     else
       write(IMAIN,*) '  1D reference model'
     endif
+    write(IMAIN,*)
     call flush_IMAIN()
   endif
 
@@ -388,6 +391,14 @@
   case default
     call exit_MPI(myrank, 'Error attenuation setup: Reference 1D Model values missing')
   end select
+
+  ! debugging
+  !if (myrank == 0) then
+  !  print *,'debug: Qmu '
+  !  do i = 1,Qn
+  !    print *,'  ',i,Qmu(i)
+  !  enddo
+  !endif
 
   ! sets up storage of relaxation times
   do i = 1,Qn

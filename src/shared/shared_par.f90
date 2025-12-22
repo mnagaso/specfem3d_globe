@@ -27,10 +27,12 @@
 
   module constants
 
+  implicit none
+
   include "constants.h"
 
   ! proc number for MPI process
-  integer :: myrank
+  integer :: myrank = 0
 
   ! a negative initial value is a convention that indicates that groups
   ! (i.e. sub-communicators, one per run) are off by default
@@ -79,6 +81,7 @@
 
   ! sources
   logical :: USE_FORCE_POINT_SOURCE
+  logical :: USE_SINSQ_STF = .false.
   logical :: USE_MONOCHROMATIC_CMT_SOURCE,PRINT_SOURCE_TIME_FUNCTION
 
   ! checkpointing/restart
@@ -110,7 +113,7 @@
   integer :: POISSON_SOLVER = 0   ! 0 == builtin / 1 == PETSc solver
 
   ! regional mesh cut-off
-  logical :: REGIONAL_MESH_CUTOFF
+  logical :: REGIONAL_MESH_CUTOFF = .false.
   ! regional mesh cut-off depth (in km)
   ! possible selections: 24.4d0, 80.d0, 220.d0, 400.d0, 600.d0, 670.d0, 771.d0
   double precision :: REGIONAL_MESH_CUTOFF_DEPTH = 400.d0
@@ -320,13 +323,20 @@
              CRUSTAL,ONE_CRUST
   logical :: MODEL_3D_MANTLE_PERTUBATIONS,HETEROGEN_3D_MANTLE
   logical :: CEM_REQUEST,CEM_ACCEPT
-  logical :: EMC_MODEL
 
+  ! EMC models
+  logical :: EMC_MODEL
+  logical :: EMC_MODEL_TISO        ! using tiso parameterization (vpv,vph,vsv,vsh,eta) from EMC model
+  logical :: EMC_MODEL_QMU         ! using attenuation (Qmu) from EMC model
+
+  ! GLL models
   logical :: MODEL_GLL
   integer :: MODEL_GLL_TYPE
 
-  logical :: ATTENUATION_3D
-  logical :: ATTENUATION_GLL
+  logical :: ATTENUATION_3D = .false.
+  logical :: ATTENUATION_3D_BERKELEY = .false.
+  logical :: ATTENUATION_GLL = .false.
+
   logical :: INCLUDE_CENTRAL_CUBE,INFLATE_CENTRAL_CUBE
 
   ! this is used in UTILS/estimate_best_values_runs.f90 only, to estimate memory use

@@ -37,7 +37,7 @@
   integer, parameter :: nparam_i = 51
   integer, dimension(nparam_i) :: bcast_integer
 
-  integer, parameter :: nparam_l = 79
+  integer, parameter :: nparam_l = 83
   logical, dimension(nparam_l) :: bcast_logical
 
   integer, parameter :: nparam_dp = 42
@@ -83,7 +83,8 @@
     bcast_logical = (/ &
             TRANSVERSE_ISOTROPY,ANISOTROPIC_3D_MANTLE,ANISOTROPIC_INNER_CORE, &
             CRUSTAL,ELLIPTICITY,GRAVITY,ONE_CRUST,ROTATION,MODEL_3D_MANTLE_PERTUBATIONS,HETEROGEN_3D_MANTLE, &
-            TOPOGRAPHY,OCEANS,MOVIE_SURFACE,MOVIE_VOLUME,ATTENUATION_3D, ATTENUATION_GLL, &
+            TOPOGRAPHY,OCEANS,MOVIE_SURFACE,MOVIE_VOLUME, &
+            ATTENUATION_3D,ATTENUATION_GLL, &
             RECEIVERS_CAN_BE_BURIED,PRINT_SOURCE_TIME_FUNCTION, &
             SAVE_MESH_FILES,ATTENUATION, &
             ABSORBING_CONDITIONS,INCLUDE_CENTRAL_CUBE,INFLATE_CENTRAL_CUBE,SAVE_FORWARD,CASE_3D, &
@@ -111,10 +112,11 @@
             USE_MONOCHROMATIC_CMT_SOURCE, ABSORB_USING_GLOBAL_SPONGE, &
             OUTPUT_SEISMOS_3D_ARRAY, &
             REGIONAL_MESH_CUTOFF,REGIONAL_MESH_ADD_2ND_DOUBLING, &
-            EMC_MODEL, &
-            FULL_GRAVITY, &
+            EMC_MODEL,EMC_MODEL_TISO,EMC_MODEL_QMU, &
+            FULL_GRAVITY, USE_SINSQ_STF, &
             HDF5_ENABLED, HDF5_FOR_MOVIES, OUTPUT_SEISMOS_HDF5, &
-            HDF5_KERNEL_VIS, HDF5_SNAPSHOT_VIS /)
+            HDF5_KERNEL_VIS, HDF5_SNAPSHOT_VIS, &
+            ATTENUATION_3D_BERKELEY /)
 
     bcast_double_precision = (/ &
             DT, &
@@ -363,12 +365,16 @@
     REGIONAL_MESH_CUTOFF = bcast_logical(71)
     REGIONAL_MESH_ADD_2ND_DOUBLING = bcast_logical(72)
     EMC_MODEL = bcast_logical(73)
-    FULL_GRAVITY = bcast_logical(74)
-    HDF5_ENABLED = bcast_logical(75)
-    HDF5_FOR_MOVIES = bcast_logical(76)
-    OUTPUT_SEISMOS_HDF5 = bcast_logical(77)
-    HDF5_KERNEL_VIS = bcast_logical(78)
-    HDF5_SNAPSHOT_VIS = bcast_logical(79)
+    EMC_MODEL_TISO = bcast_logical(74)
+    EMC_MODEL_QMU = bcast_logical(75)
+    FULL_GRAVITY = bcast_logical(76)
+    USE_SINSQ_STF = bcast_logical(77)
+    HDF5_ENABLED = bcast_logical(78)
+    HDF5_FOR_MOVIES = bcast_logical(79)
+    OUTPUT_SEISMOS_HDF5 = bcast_logical(80)
+    HDF5_KERNEL_VIS = bcast_logical(81)
+    HDF5_SNAPSHOT_VIS = bcast_logical(82)
+    ATTENUATION_3D_BERKELEY = bcast_logical(83)
 
     ! double precisions
     DT = bcast_double_precision(1)

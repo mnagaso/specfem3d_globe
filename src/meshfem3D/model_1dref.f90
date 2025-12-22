@@ -47,11 +47,13 @@
 ! A radial model of anelasticity consistent with long period surface wave attenuation,
 ! Bull. Seism. Soc. Am., 86, 144-158
 !
-! 1-D profiles: see http://www.iris.edu/ds/products/emc-stw105/
+! 1-D profiles: see https://ds.iris.edu/ds/products/emc-stw105/
 !               internal discontinuities: contains a 410-km and 650-km discontinuity
 !--------------------------------------------------------------------------------------------------
 
   module model_1dref_par
+
+  implicit none
 
   ! number of layers in DATA/s362ani/REF
   integer, parameter :: NR_REF = 750
