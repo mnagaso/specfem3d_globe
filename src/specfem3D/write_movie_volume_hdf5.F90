@@ -533,10 +533,11 @@
 
   use constants_solver
 #ifdef USE_HDF5
-  use shared_parameters, only: OUTPUT_FILES,MOVIE_VOLUME_TYPE,MOVIE_COARSE,H5_COL
+  use shared_parameters, only: OUTPUT_FILES,MOVIE_VOLUME_TYPE,MOVIE_COARSE,H5_COL,HDF5_IO_NODES
   use specfem_par, only: it
   use specfem_par_movie, only: npoints_3dmovie,muvstore_crust_mantle_3dmovie,mask_3dmovie,nu_3dmovie
   use specfem_par_movie_hdf5
+  use io_server_hdf5
 #endif
 
   implicit none
@@ -629,62 +630,99 @@
   enddo
   if (ipoints_3dmovie /= npoints_3dmovie) stop 'did not find the right number of points for 3D movie'
 
-  ! initialize h5 file for volume movie
-  call world_get_comm(comm)
-  call world_get_info_null(info)
-  call h5_initialize()
-  call h5_set_mpi_info(comm, info, myrank, NPROCTOT_VAL)
+  ! use IO server when dedicated HDF5 IO nodes are enabled
+  if (HDF5_IO_NODES > 0) then
 
-  ! create group and datasets
-  file_name = trim(OUTPUT_FILES) // '/movie_volume.h5'
-  group_name = 'it_' // trim(i2c(it))
+    ! ensure all previous nonblocking sends have completed
+    call wait_all_send()
 
-  if (myrank == 0) then
+    ! send strain components to IO server
+    n_req_vol = 0
 
-    ! create the file, group and dataset
-    call h5_open_file(file_name)
-    call h5_open_or_create_group(group_name)
+    n_req_vol = n_req_vol + 1
+    call isend_cr_inter(store_val3d_NN,ipoints_3dmovie,dest_ionod, &
+                        io_tag_vol_strain_NN,req_dump_vol(n_req_vol))
 
-    ! create the dataset
-    call h5_create_dataset_gen_in_group(trim(movie_prefix)//'NN', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
-    call h5_create_dataset_gen_in_group(trim(movie_prefix)//'EE', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
-    call h5_create_dataset_gen_in_group(trim(movie_prefix)//'ZZ', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
-    call h5_create_dataset_gen_in_group(trim(movie_prefix)//'NE', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
-    call h5_create_dataset_gen_in_group(trim(movie_prefix)//'NZ', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
-    call h5_create_dataset_gen_in_group(trim(movie_prefix)//'EZ', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+    n_req_vol = n_req_vol + 1
+    call isend_cr_inter(store_val3d_EE,ipoints_3dmovie,dest_ionod, &
+                        io_tag_vol_strain_EE,req_dump_vol(n_req_vol))
 
-    ! close the group
-    call h5_close_group()
-    ! close the file
-    call h5_close_file()
+    n_req_vol = n_req_vol + 1
+    call isend_cr_inter(store_val3d_ZZ,ipoints_3dmovie,dest_ionod, &
+                        io_tag_vol_strain_ZZ,req_dump_vol(n_req_vol))
 
-  endif
+    n_req_vol = n_req_vol + 1
+    call isend_cr_inter(store_val3d_NE,ipoints_3dmovie,dest_ionod, &
+                        io_tag_vol_strain_NE,req_dump_vol(n_req_vol))
 
-  ! write the data
-  if (H5_COL) then
-    ! open file
-    call h5_open_file_p_collect(file_name)
+    n_req_vol = n_req_vol + 1
+    call isend_cr_inter(store_val3d_NZ,ipoints_3dmovie,dest_ionod, &
+                        io_tag_vol_strain_NZ,req_dump_vol(n_req_vol))
+
+    n_req_vol = n_req_vol + 1
+    call isend_cr_inter(store_val3d_EZ,ipoints_3dmovie,dest_ionod, &
+                        io_tag_vol_strain_EZ,req_dump_vol(n_req_vol))
+
   else
-    ! open file
-    call h5_open_file_p(file_name)
+
+    ! initialize h5 file for volume movie
+    call world_get_comm(comm)
+    call world_get_info_null(info)
+    call h5_initialize()
+    call h5_set_mpi_info(comm, info, myrank, NPROCTOT_VAL)
+
+    ! create group and datasets
+    file_name = trim(OUTPUT_FILES) // '/movie_volume.h5'
+    group_name = 'it_' // trim(i2c(it))
+
+    if (myrank == 0) then
+
+      ! create the file, group and dataset
+      call h5_open_file(file_name)
+      call h5_open_or_create_group(group_name)
+
+      ! create the dataset
+      call h5_create_dataset_gen_in_group(trim(movie_prefix)//'NN', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+      call h5_create_dataset_gen_in_group(trim(movie_prefix)//'EE', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+      call h5_create_dataset_gen_in_group(trim(movie_prefix)//'ZZ', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+      call h5_create_dataset_gen_in_group(trim(movie_prefix)//'NE', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+      call h5_create_dataset_gen_in_group(trim(movie_prefix)//'NZ', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+      call h5_create_dataset_gen_in_group(trim(movie_prefix)//'EZ', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+
+      ! close the group
+      call h5_close_group()
+      ! close the file
+      call h5_close_file()
+
+    endif
+
+    ! write the data
+    if (H5_COL) then
+      ! open file
+      call h5_open_file_p_collect(file_name)
+    else
+      ! open file
+      call h5_open_file_p(file_name)
+    endif
+    call h5_open_group(group_name)
+
+    call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'NN', store_val3d_NN, &
+                                                     (/sum(offset_poin_vol(0:myrank-1))/), H5_COL)
+    call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'EE', store_val3d_EE, &
+                                                     (/sum(offset_poin_vol(0:myrank-1))/), H5_COL)
+    call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'ZZ', store_val3d_ZZ, &
+                                                     (/sum(offset_poin_vol(0:myrank-1))/), H5_COL)
+    call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'NE', store_val3d_NE, &
+                                                     (/sum(offset_poin_vol(0:myrank-1))/), H5_COL)
+    call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'NZ', store_val3d_NZ, &
+                                                     (/sum(offset_poin_vol(0:myrank-1))/), H5_COL)
+    call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'EZ', store_val3d_EZ, &
+                                                     (/sum(offset_poin_vol(0:myrank-1))/), H5_COL)
+
+    call h5_close_group()
+    call h5_close_file_p()
+
   endif
-  call h5_open_group(group_name)
-
-  call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'NN', store_val3d_NN, &
-                                                   (/sum(offset_poin_vol(0:myrank-1))/), H5_COL)
-  call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'EE', store_val3d_EE, &
-                                                   (/sum(offset_poin_vol(0:myrank-1))/), H5_COL)
-  call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'ZZ', store_val3d_ZZ, &
-                                                   (/sum(offset_poin_vol(0:myrank-1))/), H5_COL)
-  call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'NE', store_val3d_NE, &
-                                                   (/sum(offset_poin_vol(0:myrank-1))/), H5_COL)
-  call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'NZ', store_val3d_NZ, &
-                                                   (/sum(offset_poin_vol(0:myrank-1))/), H5_COL)
-  call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'EZ', store_val3d_EZ, &
-                                                   (/sum(offset_poin_vol(0:myrank-1))/), H5_COL)
-
-  call h5_close_group()
-  call h5_close_file_p()
 
   deallocate(store_val3d_NN,store_val3d_EE,store_val3d_ZZ, &
              store_val3d_NE,store_val3d_NZ,store_val3d_EZ)
@@ -976,9 +1014,10 @@
 
   use constants_solver
 #ifdef USE_HDF5
-  use shared_parameters, only: OUTPUT_FILES,MOVIE_VOLUME_TYPE,MOVIE_COARSE,H5_COL
+  use shared_parameters, only: OUTPUT_FILES,MOVIE_VOLUME_TYPE,MOVIE_COARSE,H5_COL,HDF5_IO_NODES
   use specfem_par, only: it
   use specfem_par_movie_hdf5
+  use io_server_hdf5
 #endif
 
   implicit none
@@ -1065,40 +1104,65 @@
   ! checks number of processed points
   if (ipoints_3dmovie /= npoints_3dmovie) stop 'did not find the right number of points for 3D movie'
 
-  ! create group and datasets
-  if (myrank == 0) then
-    call h5_open_file(file_name)
-    call h5_open_or_create_group(group_name)
+  ! use IO server when dedicated HDF5 IO nodes are enabled
+  if (HDF5_IO_NODES > 0) then
 
-    call h5_create_dataset_gen_in_group(trim(movie_prefix)//'N', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
-    call h5_create_dataset_gen_in_group(trim(movie_prefix)//'E', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
-    call h5_create_dataset_gen_in_group(trim(movie_prefix)//'Z', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+    ! ensure all previous nonblocking sends have completed
+    call wait_all_send()
+
+    ! send vector components to IO server
+    n_req_vol = 0
+
+    n_req_vol = n_req_vol + 1
+    call isend_cr_inter(store_val3d_N(1:npoints_3dmovie),npoints_3dmovie,dest_ionod, &
+                        io_tag_vol_vec_N,req_dump_vol(n_req_vol))
+
+    n_req_vol = n_req_vol + 1
+    call isend_cr_inter(store_val3d_E(1:npoints_3dmovie),npoints_3dmovie,dest_ionod, &
+                        io_tag_vol_vec_E,req_dump_vol(n_req_vol))
+
+    n_req_vol = n_req_vol + 1
+    call isend_cr_inter(store_val3d_Z(1:npoints_3dmovie),npoints_3dmovie,dest_ionod, &
+                        io_tag_vol_vec_Z,req_dump_vol(n_req_vol))
+
+  else
+
+    ! create group and datasets
+    if (myrank == 0) then
+      call h5_open_file(file_name)
+      call h5_open_or_create_group(group_name)
+
+      call h5_create_dataset_gen_in_group(trim(movie_prefix)//'N', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+      call h5_create_dataset_gen_in_group(trim(movie_prefix)//'E', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+      call h5_create_dataset_gen_in_group(trim(movie_prefix)//'Z', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+
+      call h5_close_group()
+      call h5_close_file()
+    endif
+
+    call synchronize_all()
+
+    ! write the data
+    if (H5_COL) then
+      ! open file
+      call h5_open_file_p_collect(file_name)
+    else
+      ! open file
+      call h5_open_file_p(file_name)
+    endif
+    call h5_open_group(group_name)
+
+    call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'N', store_val3d_N(1:npoints_3dmovie), &
+                                                     (/offset_poin_vol(0:myrank-1)/), H5_COL)
+    call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'E', store_val3d_E(1:npoints_3dmovie), &
+                                                     (/offset_poin_vol(0:myrank-1)/), H5_COL)
+    call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'Z', store_val3d_Z(1:npoints_3dmovie), &
+                                                     (/offset_poin_vol(0:myrank-1)/), H5_COL)
 
     call h5_close_group()
     call h5_close_file()
+
   endif
-
-  call synchronize_all()
-
-  ! write the data
-  if (H5_COL) then
-    ! open file
-    call h5_open_file_p_collect(file_name)
-  else
-    ! open file
-    call h5_open_file_p(file_name)
-  endif
-  call h5_open_group(group_name)
-
-  call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'N', store_val3d_N(1:npoints_3dmovie), &
-                                                   (/offset_poin_vol(0:myrank-1)/), H5_COL)
-  call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'E', store_val3d_E(1:npoints_3dmovie), &
-                                                   (/offset_poin_vol(0:myrank-1)/), H5_COL)
-  call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'Z', store_val3d_Z(1:npoints_3dmovie), &
-                                                   (/offset_poin_vol(0:myrank-1)/), H5_COL)
-
-  call h5_close_group()
-  call h5_close_file()
 
   deallocate(store_val3d_N,store_val3d_E,store_val3d_Z)
 

@@ -268,11 +268,13 @@ subroutine write_movie_surface_hdf5()
   use specfem_par_crustmantle
   use specfem_par_movie
   use specfem_par_movie_hdf5
+  use io_server_hdf5
 
   implicit none
 
   ! local parameters
   integer :: ipoin,ispec2D,ispec,i,j,k,iglob1,iglob2,iglob3,iglob4
+  integer :: req_count
 
   ! by default: save velocity here to avoid static offset on displacement for movies
 
@@ -397,59 +399,89 @@ subroutine write_movie_surface_hdf5()
       endif
     endif
   enddo
-  ! TODO ADD IOSERVER
+  ! use IO server when dedicated HDF5 IO nodes are enabled
+  if (HDF5_IO_NODES > 0) then
 
-  ! initialize h5 file for surface movie
-  call world_get_comm(comm)
-  call world_get_info_null(info)
-  call h5_initialize()
-  call h5_set_mpi_info(comm, info, myrank, NPROCTOT_VAL)
+    ! hdf5 i/o server request index for surface movie
+    req_count = 1
 
-  ! create file and dataset
-  file_name = trim(OUTPUT_FILES)//"/movie_surface.h5"
-  group_name = "it_"//trim(i2c(it))
+    ! wait for all previous send requests to finish
+    call wait_all_send()
 
-  ! create dataset
-  if (myrank == 0) then
-    call h5_open_file(file_name)
-    call h5_create_group(group_name)
+    ! send surface movie data to IO server
+    call isend_cr_inter(store_val_ux,ipoin,dest_ionod, &
+                        io_tag_surf_ux,req_dump_surf(req_count))
+    req_count = req_count + 1
+    call isend_cr_inter(store_val_uy,ipoin,dest_ionod, &
+                        io_tag_surf_uy,req_dump_surf(req_count))
+    req_count = req_count + 1
+    call isend_cr_inter(store_val_uz,ipoin,dest_ionod, &
+                        io_tag_surf_uz,req_dump_surf(req_count))
+    req_count = req_count + 1
+
+    ! store number of MPI_ISEND requests for surface movie
+    n_req_surf = req_count - 1
+
+    ! write XDMF body (metadata) on main rank only
+    if (myrank == 0) then
+      call write_xdmf_surface_body(it, npoints_surf_mov_all_proc)
+    endif
+
+  else
+
+    ! initialize h5 file for surface movie
+    call world_get_comm(comm)
+    call world_get_info_null(info)
+    call h5_initialize()
+    call h5_set_mpi_info(comm, info, myrank, NPROCTOT_VAL)
+
+    ! create file and dataset
+    file_name = trim(OUTPUT_FILES)//"/movie_surface.h5"
+    group_name = "it_"//trim(i2c(it))
+
+    ! create dataset
+    if (myrank == 0) then
+      call h5_open_file(file_name)
+      call h5_create_group(group_name)
+      call h5_open_group(group_name)
+
+      ! create datasets ux, uy, uz
+      call h5_create_dataset_gen_in_group("ux", (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
+      call h5_create_dataset_gen_in_group("uy", (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
+      call h5_create_dataset_gen_in_group("uz", (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
+
+      ! close group
+      call h5_close_group()
+      ! close file
+      call h5_close_file()
+    endif
+
+    call synchronize_all()
+
+    ! write data to h5 file
+    if (H5_COL) then
+      ! open file
+      call h5_open_file_p_collect(file_name)
+    else
+      ! open file
+      call h5_open_file_p(file_name)
+    endif
+
     call h5_open_group(group_name)
 
-    ! create datasets ux, uy, uz
-    call h5_create_dataset_gen_in_group("ux", (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
-    call h5_create_dataset_gen_in_group("uy", (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
-    call h5_create_dataset_gen_in_group("uz", (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
+    ! write ux, uy, uz
+    call h5_write_dataset_collect_hyperslab_in_group("ux", store_val_ux, (/sum(offset_poin(0:myrank-1))/), H5_COL)
+    call h5_write_dataset_collect_hyperslab_in_group("uy", store_val_uy, (/sum(offset_poin(0:myrank-1))/), H5_COL)
+    call h5_write_dataset_collect_hyperslab_in_group("uz", store_val_uz, (/sum(offset_poin(0:myrank-1))/), H5_COL)
 
-    ! close group
+    ! close group and file
     call h5_close_group()
-    ! close file
-    call h5_close_file()
+    call h5_close_file_p()
+
+    ! write xdmf body
+    call write_xdmf_surface_body(it, npoints_surf_mov_all_proc)
+
   endif
-
-  call synchronize_all()
-
-  ! write data to h5 file
-  if (H5_COL) then
-    ! open file
-    call h5_open_file_p_collect(file_name)
-  else
-    ! open file
-    call h5_open_file_p(file_name)
-  endif
-
-  call h5_open_group(group_name)
-
-  ! write ux, uy, uz
-  call h5_write_dataset_collect_hyperslab_in_group("ux", store_val_ux, (/sum(offset_poin(0:myrank-1))/), H5_COL)
-  call h5_write_dataset_collect_hyperslab_in_group("uy", store_val_uy, (/sum(offset_poin(0:myrank-1))/), H5_COL)
-  call h5_write_dataset_collect_hyperslab_in_group("uz", store_val_uz, (/sum(offset_poin(0:myrank-1))/), H5_COL)
-
-  ! close group and file
-  call h5_close_group()
-  call h5_close_file_p()
-
-  ! write xdmf body
-  call write_xdmf_surface_body(it, npoints_surf_mov_all_proc)
 
 #else
 

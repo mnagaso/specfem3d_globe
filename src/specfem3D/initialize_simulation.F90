@@ -653,7 +653,8 @@
   ! IO server checks
   if (HDF5_IO_NODES > 1) then
     ! currently only one IO server is supported
-    call exit_MPI(myrank,'HDF5_IO_NODES > 1 not supported yet')
+    !call exit_MPI(myrank,'HDF5_IO_NODES > 1 not supported yet')
+    print *, 'Warning: HDF5_IO_NODES > 1 not supported yet, experimental run with multiple IO servers'
   endif
   if (HDF5_IO_NODES /= 0 .and. .not. HDF5_ENABLED) then
     ! IO server is enabled but HDF5 is not

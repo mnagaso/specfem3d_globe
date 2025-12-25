@@ -70,10 +70,32 @@ module io_server_hdf5
   public :: io_tag_ford_undo_neq, io_tag_ford_undo_neq1, io_tag_ford_undo_pgrav1
   public :: io_tag_ford_undo_nmsg
 
+  ! surface movie metadata
+  public :: io_tag_surf_offset, io_tag_surf_npoints
+
+  ! surface movie data (ux, uy, uz)
+  public :: io_tag_surf_ux, io_tag_surf_uy, io_tag_surf_uz
+
+  ! volume movie metadata (movie-point offsets and total count)
+  public :: io_tag_vol_offset, io_tag_vol_npoints
+
+  ! volume movie data (strain and vector components at movie points)
+  public :: io_tag_vol_strain_NN, io_tag_vol_strain_EE, io_tag_vol_strain_ZZ
+  public :: io_tag_vol_strain_NE, io_tag_vol_strain_NZ, io_tag_vol_strain_EZ
+  public :: io_tag_vol_vec_N,     io_tag_vol_vec_E,     io_tag_vol_vec_Z
+
   ! MPI requests
   public :: n_req_ford_undo
   public :: req_dump_ford_undo
   public :: n_msg_ford_undo
+
+  ! surface movie nonblocking send requests
+  public :: n_req_surf
+  public :: req_dump_surf
+
+  ! volume movie nonblocking send requests
+  public :: n_req_vol
+  public :: req_dump_vol
 
   public :: nproc_io
 
@@ -123,10 +145,46 @@ module io_server_hdf5
   integer :: io_tag_nsubset_iterations  = 100035
   integer :: io_tag_ford_undo_nmsg      = 100036
 
+  ! surface movie metadata tags
+  integer :: io_tag_surf_offset         = 110001
+  integer :: io_tag_surf_npoints        = 110002
+
+  ! surface movie data tags
+  integer :: io_tag_surf_ux             = 110010
+  integer :: io_tag_surf_uy             = 110011
+  integer :: io_tag_surf_uz             = 110012
+
+  ! surface movie time-stepping tags
+  integer :: io_tag_surf_it_begin       = 110020
+  integer :: io_tag_surf_it_end         = 110021
+
+  ! volume movie metadata tags
+  integer :: io_tag_vol_offset          = 120001
+  integer :: io_tag_vol_npoints         = 120002
+
+  ! volume movie data tags (movie-point-based)
+  integer :: io_tag_vol_strain_NN       = 120010
+  integer :: io_tag_vol_strain_EE       = 120011
+  integer :: io_tag_vol_strain_ZZ       = 120012
+  integer :: io_tag_vol_strain_NE       = 120013
+  integer :: io_tag_vol_strain_NZ       = 120014
+  integer :: io_tag_vol_strain_EZ       = 120015
+  integer :: io_tag_vol_vec_N           = 120020
+  integer :: io_tag_vol_vec_E           = 120021
+  integer :: io_tag_vol_vec_Z           = 120022
+
   ! mpi_req dump (used in wait_all_send)
   integer :: n_req_ford_undo = 0
   integer, dimension(34) :: req_dump_ford_undo
   integer :: n_msg_ford_undo = 0
+
+  ! surface movie nonblocking send requests
+  integer :: n_req_surf = 0
+  integer, dimension(3) :: req_dump_surf
+
+  ! volume movie nonblocking send requests
+  integer :: n_req_vol = 0
+  integer, dimension(6) :: req_dump_vol
 
   ! responsible id of io node
   integer :: dest_ionod = 0
@@ -136,7 +194,7 @@ module io_server_hdf5
   integer :: my_io_id
 
   ! verbose output (for debugging)
-  logical, parameter :: VERBOSE = .false.
+  logical, parameter :: VERBOSE = .true.
 
 
 ! USE_HDF5
@@ -561,11 +619,44 @@ contains
              max_ford_undo_out, &         ! number of iterations when IO happens for undo attenuation
              ford_undo_out_count          ! count the completed iterations for undo attenuation
 
+  ! surface movie
+  integer :: n_recv_msg_surf, &           ! number of messages received for one surface movie frame
+             max_surf_frames, &           ! maximum number of surface movie frames
+             surf_frame_count, &          ! count the completed surface movie frames
+             n_msg_surf, &                ! number of messages per surface movie frame
+             max_surf_points, &           ! maximum number of local surface points on any compute rank
+             it_first_surf                ! first time step index producing a surface frame
+
+  ! volume movie (movie-point-based types: strain/vector)
+  integer :: n_recv_msg_vol, &            ! number of messages received for one volume movie frame
+             max_vol_frames, &            ! maximum number of volume movie frames
+             vol_frame_count, &           ! count the completed volume movie frames
+             n_msg_vol, &                 ! number of messages per volume movie frame
+             max_vol_points, &            ! maximum number of local volume movie points on any compute rank
+             it_first_vol                 ! first time step index producing a volume frame
+
+  ! track which frame index already has its HDF5 group/datasets created
+  integer :: surf_group_frame_prepared
+  integer :: vol_group_frame_prepared
+
   ! array for dumping the data array
   real(kind=CUSTOM_REAL), dimension(:),         allocatable :: dump_ford_undo_1d_glob
   real(kind=CUSTOM_REAL), dimension(:,:),       allocatable :: dump_ford_undo_2d_glob
   real(kind=CUSTOM_REAL), dimension(:,:,:,:),   allocatable :: dump_ford_undo_4d
   real(kind=CUSTOM_REAL), dimension(:,:,:,:,:), allocatable :: dump_ford_undo_5d
+
+  ! arrays for surface movie values (per rank)
+  real(kind=CUSTOM_REAL), dimension(:), allocatable :: dump_surf_ux
+  real(kind=CUSTOM_REAL), dimension(:), allocatable :: dump_surf_uy
+  real(kind=CUSTOM_REAL), dimension(:), allocatable :: dump_surf_uz
+
+  ! arrays for volume movie values at movie points (per rank)
+  real(kind=CUSTOM_REAL), dimension(:), allocatable :: dump_vol1
+  real(kind=CUSTOM_REAL), dimension(:), allocatable :: dump_vol2
+  real(kind=CUSTOM_REAL), dimension(:), allocatable :: dump_vol3
+  real(kind=CUSTOM_REAL), dimension(:), allocatable :: dump_vol4
+  real(kind=CUSTOM_REAL), dimension(:), allocatable :: dump_vol5
+  real(kind=CUSTOM_REAL), dimension(:), allocatable :: dump_vol6
 
   ! maximum nglob and nspec in offset arrays
   integer :: max_nglob
@@ -573,23 +664,51 @@ contains
 
   integer :: i_out
 
+  ! initialize HDF5 MPI context on IO storage tasks
+  if (HDF5_ENABLED .and. IO_storage_task) then
+    ! use the global MPI communicator and info handle
+    call world_get_comm(comm)
+    call world_get_info_null(info)
+    call h5_initialize()
+    call h5_set_mpi_info(comm, info, myrank, NPROCTOT_VAL)
+  endif
+
   ! initialize all counters
   ! undo attenuation
   n_recv_msg_ford_undo = 0 ! number of messages received for undo attenuation of one iteration
   max_ford_undo_out    = 0 ! number of iterations when IO happens for undo attenuation
   ford_undo_out_count  = 0 ! count the completed iterations for undo attenuation
 
-  ! create all the HDF5 files and datasets
-  do i_out = 1, NSUBSET_ITERATIONS
-    call create_hdf5_files_and_datasets(i_out)
-  enddo
+  ! surface movie
+  n_recv_msg_surf   = 0
+  max_surf_frames   = 0
+  surf_frame_count  = 0
+  n_msg_surf        = 0
+  max_surf_points   = 0
+  it_first_surf     = 0
+  surf_group_frame_prepared = -1
+
+  ! volume movie
+  n_recv_msg_vol    = 0
+  max_vol_frames    = 0
+  vol_frame_count   = 0
+  n_msg_vol         = 0
+  max_vol_points    = 0
+  it_first_vol      = 0
+    vol_group_frame_prepared = -1
+
 
   !
   ! initialize
   !
 
   ! undo attenuation
-  if (UNDO_ATTENUATION) then
+  if (UNDO_ATTENUATION .and. SAVE_FORWARD) then
+
+    ! create all the HDF5 files and datasets for undo attenuation
+    do i_out = 1, NSUBSET_ITERATIONS
+      call create_hdf5_files_and_datasets(i_out)
+    enddo
 
     n_msg_ford_undo   = n_msg_ford_undo*nproc_io ! multiply by the number of compute nodes for each io node
     max_ford_undo_out = NSUBSET_ITERATIONS ! multiply by the number of snapshots
@@ -609,16 +728,125 @@ contains
              dump_ford_undo_4d(NGLLX, NGLLY, NGLLZ, max_nspec), &
              dump_ford_undo_5d(NGLLX, NGLLY, NGLLZ, N_SLS, max_nspec))
 
-  endif ! UNDO_ATTENUATION
+  endif ! UNDO_ATTENUATION .and. SAVE_FORWARD
+
+  ! surface movie initialization
+  if (MOVIE_SURFACE) then
+
+    ! number of messages per surface frame (ux, uy, uz from each compute rank handled by this IO node)
+    n_msg_surf = 3 * nproc_io
+
+    ! determine number of surface movie frames from time-stepping parameters
+    ! frames are written whenever mod(it,NTSTEP_BETWEEN_FRAMES) == 0 within [it_begin,it_end]
+    if (NTSTEP_BETWEEN_FRAMES > 0) then
+      it_first_surf = ((it_begin + NTSTEP_BETWEEN_FRAMES - 1)/NTSTEP_BETWEEN_FRAMES) * NTSTEP_BETWEEN_FRAMES
+      if (it_first_surf <= it_end) then
+        max_surf_frames = (it_end - it_first_surf) / NTSTEP_BETWEEN_FRAMES + 1
+        print *, 'io_server: surface movie frames from it=', it_first_surf, ' to it=', it_end, &
+                 ' every ', NTSTEP_BETWEEN_FRAMES, ' steps: total ', max_surf_frames, ' frames'
+      else
+        max_surf_frames = 0
+      endif
+    else
+      max_surf_frames = 0
+    endif
+
+    ! allocate buffers for the largest local surface chunk
+    if (allocated(offset_poin)) then
+      max_surf_points = maxval(offset_poin)
+      if (max_surf_points > 0) then
+        allocate(dump_surf_ux(max_surf_points))
+        allocate(dump_surf_uy(max_surf_points))
+        allocate(dump_surf_uz(max_surf_points))
+      endif
+    endif
+
+  endif
+
+  ! volume movie initialization (only for movie-point-based types: strains/vector)
+  if (MOVIE_VOLUME) then
+
+    ! MOVIE_VOLUME_TYPE 1-3: strains / time-integrated / potency (6 components)
+    ! MOVIE_VOLUME_TYPE 5-6: displacement / velocity vectors (3 components)
+    select case (MOVIE_VOLUME_TYPE)
+    case (1,2,3)
+      n_msg_vol = 6 * nproc_io
+    case (5,6)
+      n_msg_vol = 3 * nproc_io
+    case default
+      n_msg_vol = 0
+    end select
+
+    ! determine number of volume movie frames from movie parameters
+    ! frames are written whenever mod(it-MOVIE_START,NTSTEP_BETWEEN_FRAMES) == 0
+    ! and it is within [MOVIE_START,MOVIE_STOP]
+    if (NTSTEP_BETWEEN_FRAMES > 0) then
+      ! first time step (within this run) that satisfies the movie sampling rule
+      it_first_vol = MOVIE_START + ((max(it_begin, MOVIE_START) - MOVIE_START + NTSTEP_BETWEEN_FRAMES - 1) / NTSTEP_BETWEEN_FRAMES) * NTSTEP_BETWEEN_FRAMES
+
+      ! limit movie duration to the actual simulated range
+      if (min(it_end, MOVIE_STOP) >= it_first_vol) then
+        max_vol_frames = (min(it_end, MOVIE_STOP) - it_first_vol) / NTSTEP_BETWEEN_FRAMES + 1
+      else
+        max_vol_frames = 0
+      endif
+    else
+      max_vol_frames = 0
+    endif
+
+    ! allocate buffers for the largest local volume movie chunk
+    if (allocated(offset_poin_vol)) then
+      max_vol_points = maxval(offset_poin_vol)
+      if (max_vol_points > 0) then
+        allocate(dump_vol1(max_vol_points))
+        allocate(dump_vol2(max_vol_points))
+        allocate(dump_vol3(max_vol_points))
+        allocate(dump_vol4(max_vol_points))
+        allocate(dump_vol5(max_vol_points))
+        allocate(dump_vol6(max_vol_points))
+      endif
+    endif
+
+  endif
 
 
   ! initialize timer
   call initialize_bytes_written()
 
+  if (VERBOSE .and. IO_storage_task) then
+    print *, 'io_server: entering do_io_start_idle'
+    print *, '  surf: it_first_surf =', it_first_surf, ' max_surf_frames =', max_surf_frames, ' n_msg_surf =', n_msg_surf
+    print *, '  vol : it_first_vol  =', it_first_vol,  ' max_vol_frames  =', max_vol_frames,  ' n_msg_vol  =', n_msg_vol
+  endif
+
   !
   ! idling loop
   !
-  do while (ford_undo_out_count < max_ford_undo_out)
+  do while ( (UNDO_ATTENUATION .and. SAVE_FORWARD .and. ford_undo_out_count < max_ford_undo_out) .or. &
+             (MOVIE_SURFACE .and. HDF5_ENABLED .and. surf_frame_count < max_surf_frames) .or. &
+             (MOVIE_VOLUME .and. HDF5_ENABLED .and. vol_frame_count  < max_vol_frames) )
+
+    ! for surface movies, create the HDF5 group and datasets once per frame
+    if (MOVIE_SURFACE .and. HDF5_ENABLED) then
+      if (max_surf_frames > 0 .and. n_msg_surf > 0) then
+        if (surf_frame_count < max_surf_frames .and. n_recv_msg_surf == 0 .and. &
+            surf_group_frame_prepared /= surf_frame_count) then
+          call create_surface_frame_group(surf_frame_count, it_first_surf)
+          surf_group_frame_prepared = surf_frame_count
+        endif
+      endif
+    endif
+
+    ! for volume movies, create the HDF5 group and datasets once per frame
+    if (MOVIE_VOLUME .and. HDF5_ENABLED) then
+      if (max_vol_frames > 0 .and. n_msg_vol > 0) then
+        if (vol_frame_count < max_vol_frames .and. n_recv_msg_vol == 0 .and. &
+            vol_group_frame_prepared /= vol_frame_count) then
+          call create_volume_frame_group(vol_frame_count, it_first_vol)
+          vol_group_frame_prepared = vol_frame_count
+        endif
+      endif
+    endif
 
     ! check the iteration counter
 
@@ -630,13 +858,15 @@ contains
     tag_src = status(my_status_source)
 
     ! debug output on the received message
-    if (VERBOSE) then
-      print *, "io_server: rank ", myrank, " received message with tag ", tag, " from rank ", tag_src, &
-               " counters, ford undo: ", n_recv_msg_ford_undo, " / ", n_msg_ford_undo
+    if (VERBOSE .and. IO_storage_task) then
+      print *, 'io_server: rank', myrank, 'received message tag', tag, 'from rank', tag_src
+      print *, '  ford_undo:', n_recv_msg_ford_undo, '/', n_msg_ford_undo
+      print *, '  surf     :', n_recv_msg_surf, '/', n_msg_surf, ' frame ', surf_frame_count, '/', max_surf_frames
+      print *, '  vol      :', n_recv_msg_vol,  '/', n_msg_vol,  ' frame ', vol_frame_count,  '/', max_vol_frames
     endif
 
     ! undo attenuation
-    if (UNDO_ATTENUATION) then
+    if (UNDO_ATTENUATION .and. SAVE_FORWARD .and. tag >= io_tag_ford_undo_d_cm .and. tag <= io_tag_ford_undo_pgrav1) then
       ! receive the data
       call recv_and_write_ford_undo(tag, tag_src, status, &
                                     dump_ford_undo_1d_glob, &
@@ -648,21 +878,70 @@ contains
       ! count 1 message received
       n_recv_msg_ford_undo = n_recv_msg_ford_undo + 1
 
-    endif ! UNDO_ATTENUATION
+    endif ! UNDO_ATTENUATION .and. SAVE_FORWARD
+
+    ! surface movie
+    if (MOVIE_SURFACE .and. &
+        (tag == io_tag_surf_ux .or. tag == io_tag_surf_uy .or. tag == io_tag_surf_uz)) then
+
+      call recv_and_write_surface_movie(tag, tag_src, status, &
+                                        dump_surf_ux, dump_surf_uy, dump_surf_uz, &
+                                        surf_frame_count, it_first_surf)
+
+      ! count 1 message received
+      n_recv_msg_surf = n_recv_msg_surf + 1
+
+    endif
+
+    ! volume movie (movie-point-based)
+    if (MOVIE_VOLUME .and. &
+        (tag == io_tag_vol_strain_NN .or. tag == io_tag_vol_strain_EE .or. tag == io_tag_vol_strain_ZZ .or. &
+         tag == io_tag_vol_strain_NE .or. tag == io_tag_vol_strain_NZ .or. tag == io_tag_vol_strain_EZ .or. &
+         tag == io_tag_vol_vec_N     .or. tag == io_tag_vol_vec_E     .or. tag == io_tag_vol_vec_Z)) then
+
+      call recv_and_write_volume_movie(tag, tag_src, status, &
+                                       dump_vol1, dump_vol2, dump_vol3, &
+                                       dump_vol4, dump_vol5, dump_vol6, &
+                                       vol_frame_count, it_first_vol)
+
+      ! count 1 message received
+      n_recv_msg_vol = n_recv_msg_vol + 1
+
+    endif
 
     ! check receive counters
-    if (n_recv_msg_ford_undo >= n_msg_ford_undo) then
-      ! increment the iteration counter
-      ford_undo_out_count = ford_undo_out_count + 1
-      ! reset the receive counter
-      n_recv_msg_ford_undo = 0
+    if (UNDO_ATTENUATION .and. SAVE_FORWARD) then
+      if (n_recv_msg_ford_undo >= n_msg_ford_undo) then
+        ! increment the iteration counter
+        ford_undo_out_count = ford_undo_out_count + 1
+        ! reset the receive counter
+        n_recv_msg_ford_undo = 0
 
-      ! write out the times
-      call calculate_bandwidth_all_procs()
+        ! write out the times
+        call calculate_bandwidth_all_procs()
 
-      ! re-initialize timer
-      call initialize_bytes_written()
+        ! re-initialize timer
+        call initialize_bytes_written()
 
+      endif
+    endif
+
+    if (MOVIE_SURFACE) then
+      if (max_surf_frames > 0 .and. n_msg_surf > 0) then
+        if (n_recv_msg_surf >= n_msg_surf) then
+          surf_frame_count = surf_frame_count + 1
+          n_recv_msg_surf = 0
+        endif
+      endif
+    endif
+
+    if (MOVIE_VOLUME) then
+      if (max_vol_frames > 0 .and. n_msg_vol > 0) then
+        if (n_recv_msg_vol >= n_msg_vol) then
+          vol_frame_count = vol_frame_count + 1
+          n_recv_msg_vol = 0
+        endif
+      endif
     endif
 
 
@@ -671,13 +950,38 @@ contains
   ! end of idling loop
   !
 
+  call calculate_bandwidth_all_procs()
+
+  if (VERBOSE .and. IO_storage_task) then
+    print *, 'io_server: leaving do_io_start_idle'
+    print *, '  final surf frames: ', surf_frame_count, '/', max_surf_frames
+    print *, '  final vol  frames: ', vol_frame_count,  '/', max_vol_frames
+  endif
+
   ! deallocate temporary arrays
   ! undo attenuation
-  if (UNDO_ATTENUATION) then
+  if (UNDO_ATTENUATION .and. SAVE_FORWARD) then
     deallocate(dump_ford_undo_1d_glob, &
                dump_ford_undo_2d_glob, &
                dump_ford_undo_4d, &
                dump_ford_undo_5d)
+  endif
+
+  ! surface movie buffers
+  if (MOVIE_SURFACE) then
+    if (allocated(dump_surf_ux)) deallocate(dump_surf_ux)
+    if (allocated(dump_surf_uy)) deallocate(dump_surf_uy)
+    if (allocated(dump_surf_uz)) deallocate(dump_surf_uz)
+  endif
+
+  ! volume movie buffers
+  if (MOVIE_VOLUME) then
+    if (allocated(dump_vol1)) deallocate(dump_vol1)
+    if (allocated(dump_vol2)) deallocate(dump_vol2)
+    if (allocated(dump_vol3)) deallocate(dump_vol3)
+    if (allocated(dump_vol4)) deallocate(dump_vol4)
+    if (allocated(dump_vol5)) deallocate(dump_vol5)
+    if (allocated(dump_vol6)) deallocate(dump_vol6)
   endif
 
 
@@ -715,7 +1019,7 @@ contains
   ! pass necessary information to io node
 
   ! forward undo att
-  if (UNDO_ATTENUATION) then
+  if (UNDO_ATTENUATION .and. SAVE_FORWARD) then
     ! receive NSUBSET_ITERATIONS
     call recv_i_inter(tmp_arr, 1, 0, io_tag_nsubset_iterations)
     NSUBSET_ITERATIONS = tmp_arr(1)
@@ -741,7 +1045,46 @@ contains
     call recv_i_inter(tmp_arr, 1, 0, io_tag_ford_undo_nmsg)
     n_msg_ford_undo = tmp_arr(1)
 
-  endif ! UNDO_ATTENUATION
+  else
+    n_msg_ford_undo = 0
+    NSUBSET_ITERATIONS = 0
+  endif ! UNDO_ATTENUATION and SAVE_FORWARD
+
+  ! surface movie metadata
+  if (MOVIE_SURFACE) then
+
+    ! allocate offset array on IO tasks
+    if (.not. allocated(offset_poin)) then
+      allocate(offset_poin(0:NPROCTOT_VAL-1))
+    endif
+
+    ! receive surface movie offsets and total number of points
+    call recv_i_inter(offset_poin, NPROCTOT_VAL, 0, io_tag_surf_offset)
+    call recv_i_inter(tmp_arr, 1, 0, io_tag_surf_npoints)
+    npoints_surf_mov_all_proc = tmp_arr(1)
+
+    ! receive time-stepping range for surface movie frames
+    call recv_i_inter(tmp_arr, 1, 0, io_tag_surf_it_begin)
+    it_begin = tmp_arr(1)
+    call recv_i_inter(tmp_arr, 1, 0, io_tag_surf_it_end)
+    it_end = tmp_arr(1)
+
+  endif
+
+  ! volume movie metadata (movie-point-based types)
+  if (MOVIE_VOLUME) then
+
+    ! allocate offset array on IO tasks
+    if (.not. allocated(offset_poin_vol)) then
+      allocate(offset_poin_vol(0:NPROCTOT_VAL-1))
+    endif
+
+    ! receive volume movie offsets and total number of points
+    call recv_i_inter(offset_poin_vol, NPROCTOT_VAL, 0, io_tag_vol_offset)
+    call recv_i_inter(tmp_arr, 1, 0, io_tag_vol_npoints)
+    npoints_vol_mov_all_proc = tmp_arr(1)
+
+  endif
 
 #else
   ! no HDF5 compilation support
@@ -777,7 +1120,7 @@ contains
     ! pass necessary information to io node
 
     ! forward undo att
-    if (UNDO_ATTENUATION) then
+    if (UNDO_ATTENUATION .and. SAVE_FORWARD) then
       if (myrank == 0) then
 
         ! count up the number of messages
@@ -815,7 +1158,43 @@ contains
         enddo ! i_ionod
       endif ! myrank == 0
 
-    endif ! UNDO_ATTENUATION
+    endif ! UNDO_ATTENUATION .and. SAVE_FORWARD
+
+    ! surface movie metadata
+    if (MOVIE_SURFACE) then
+      if (myrank == 0) then
+
+        do i_ionod = 0, HDF5_IO_NODES-1
+
+          ! send per-rank surface offsets and total number of points
+          call send_i_inter(offset_poin, NPROCTOT_VAL, i_ionod, io_tag_surf_offset)
+          tmp_int = npoints_surf_mov_all_proc
+          call send_i_inter((/tmp_int/), 1, i_ionod, io_tag_surf_npoints)
+
+          ! send time-stepping range for surface movie frames
+          tmp_int = it_begin
+          call send_i_inter((/tmp_int/), 1, i_ionod, io_tag_surf_it_begin)
+          tmp_int = it_end
+          call send_i_inter((/tmp_int/), 1, i_ionod, io_tag_surf_it_end)
+
+        enddo
+      endif
+    endif
+
+    ! volume movie metadata (movie-point-based types)
+    if (MOVIE_VOLUME) then
+      if (myrank == 0) then
+
+        do i_ionod = 0, HDF5_IO_NODES-1
+
+          ! send per-rank volume movie offsets and total number of movie points
+          call send_i_inter(offset_poin_vol, NPROCTOT_VAL, i_ionod, io_tag_vol_offset)
+          tmp_int = npoints_vol_mov_all_proc
+          call send_i_inter((/tmp_int/), 1, i_ionod, io_tag_vol_npoints)
+
+        enddo
+      endif
+    endif
 
 #else
   ! no HDF5 compilation support
@@ -857,22 +1236,20 @@ contains
   n_req_ford_undo = 0
 
   ! surface movie
-!  if (n_req_surf /= 0) then
-!    ! wait till all mpi_isends are finished
-!    do ireq = 1,n_req_surf
-!      call wait_req(req_dump_surf(ireq))
-!    enddo
-!  endif
-!
-!  ! volume movie
-!  if (n_req_vol /= 0) then
-!    ! wait till all mpi_isends are finished
-!    do ireq = 1,n_req_vol
-!      call wait_req(req_dump_vol(ireq))
-!    enddo
-!  endif
-!
-!  n_req_surf = 0; n_req_vol = 0
+  if (n_req_surf /= 0) then
+    do ireq = 1,n_req_surf
+      call wait_req(req_dump_surf(ireq))
+    enddo
+  endif
+  n_req_surf = 0
+
+  ! volume movie
+  if (n_req_vol /= 0) then
+    do ireq = 1,n_req_vol
+      call wait_req(req_dump_vol(ireq))
+    enddo
+  endif
+  n_req_vol = 0
 
   call synchronize_all()
 
@@ -1142,7 +1519,7 @@ contains
 
 #ifdef USE_HDF5
     ! forward undo arrays
-    if (UNDO_ATTENUATION) then
+    if (UNDO_ATTENUATION .and. SAVE_FORWARD) then
 
       ! create output files and datasets
       write(file_name, '(a,i6.6,a)') 'save_frame_at',i_snapshot,'.h5'
@@ -1216,7 +1593,7 @@ contains
         call h5_close_file()
       endif ! myrank == 0
 
-    endif ! UNDO_ATTENUATION
+    endif ! UNDO_ATTENUATION .and. SAVE_FORWARD
 
     ! wait for rank 0 to finish
     call synchronize_all()
@@ -1263,6 +1640,183 @@ contains
 
 #endif
   !
+  !-------------------------------------------------------------------------------------------------
+  !
+
+  subroutine create_surface_frame_group(i_frame, it_first_surf)
+
+#ifdef USE_HDF5
+
+    use specfem_par
+    use specfem_par_movie_hdf5
+    use manager_hdf5
+
+    implicit none
+
+    integer, intent(in) :: i_frame
+    integer, intent(in) :: it_first_surf
+
+    integer :: it_val
+
+    ! compute actual time-step index for this frame
+    it_val = it_first_surf + i_frame * NTSTEP_BETWEEN_FRAMES
+
+    ! construct file and group names
+    file_name = trim(OUTPUT_FILES)//"/movie_surface.h5"
+    group_name = "it_"//trim(i2c(it_val))
+
+    ! open file
+    if (H5_COL) then
+      call h5_open_file_p_collect(file_name)
+    else
+      call h5_open_file_p(file_name)
+    endif
+
+    ! create group and datasets on rank 0
+    if (myrank == 0) then
+      call h5_create_group(group_name)
+      call h5_open_group(group_name)
+      call h5_create_dataset_gen_in_group("ux", (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
+      call h5_create_dataset_gen_in_group("uy", (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
+      call h5_create_dataset_gen_in_group("uz", (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
+      call h5_close_group()
+    endif
+
+    call synchronize_all()
+
+    ! close file
+    call h5_close_file_p()
+
+#endif
+
+  end subroutine create_surface_frame_group
+
+  !-------------------------------------------------------------------------------------------------
+  !
+
+  subroutine create_volume_frame_group(i_frame, it_first_vol)
+
+#ifdef USE_HDF5
+
+    use specfem_par
+    use specfem_par_movie_hdf5
+    use manager_hdf5
+
+    implicit none
+
+    integer, intent(in) :: i_frame
+    integer, intent(in) :: it_first_vol
+
+    integer :: it_val
+    character(len=2) :: movie_prefix2
+    logical :: dset_exists
+    character(len=MAX_STRING_LEN) :: dset_full_name
+
+    ! compute actual time-step index for this frame
+    it_val = it_first_vol + i_frame * NTSTEP_BETWEEN_FRAMES
+
+    ! construct file and group names
+    file_name = trim(OUTPUT_FILES)//"/movie_volume.h5"
+    group_name = "it_"//trim(i2c(it_val))
+
+    ! open file collectively
+    if (H5_COL) then
+      call h5_open_file_p_collect(file_name)
+    else
+      call h5_open_file_p(file_name)
+    endif
+
+    ! create group and datasets on rank 0
+    if (myrank == 0) then
+      call h5_open_or_create_group(group_name)
+
+      select case (MOVIE_VOLUME_TYPE)
+      case (1,2,3)
+        ! strains / time-integrated / potency at movie points
+        if (MOVIE_VOLUME_TYPE == 1) then
+          movie_prefix2 = 'E '
+        else if (MOVIE_VOLUME_TYPE == 2) then
+          movie_prefix2 = 'S '
+        else
+          movie_prefix2 = 'P '
+        endif
+
+        ! create datasets only if they do not already exist
+        dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'NN'
+        call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'NN', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+        endif
+
+        dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'EE'
+        call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'EE', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+        endif
+
+        dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'ZZ'
+        call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'ZZ', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+        endif
+
+        dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'NE'
+        call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'NE', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+        endif
+
+        dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'NZ'
+        call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'NZ', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+        endif
+
+        dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'EZ'
+        call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'EZ', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+        endif
+
+      case (5,6)
+        ! displacement / velocity vectors at movie points
+        if (MOVIE_VOLUME_TYPE == 5) then
+          movie_prefix2 = 'DI'
+        else
+          movie_prefix2 = 'VE'
+        endif
+
+        dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'N'
+        call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'N', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+        endif
+
+        dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'E'
+        call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'E', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+        endif
+
+        dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'Z'
+        call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'Z', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+        endif
+      end select
+
+      call h5_close_group()
+    endif
+
+    call synchronize_all()
+
+    ! close file
+    call h5_close_file_p()
+
+#endif
+
+  end subroutine create_volume_frame_group
+
   !-------------------------------------------------------------------------------------------------
   !
 
@@ -1770,6 +2324,275 @@ contains
     !call h5_close_file()
 
   end subroutine recv_and_write_ford_undo
+
+!
+!-------------------------------------------------------------------------------------------------
+!
+
+  subroutine recv_and_write_surface_movie(tag, tag_src, status, &
+                                          dump_surf_ux, dump_surf_uy, dump_surf_uz, &
+                                          i_frame, it_first_surf)
+
+    use specfem_par
+    use specfem_par_movie_hdf5
+    use manager_hdf5
+    use constants, only: CUSTOM_REAL, my_status_size
+    use io_bandwidth
+
+    implicit none
+
+    integer, intent(in) :: tag, tag_src
+    integer, intent(in) :: status(my_status_size)
+    real(kind=CUSTOM_REAL), dimension(:), intent(inout) :: dump_surf_ux
+    real(kind=CUSTOM_REAL), dimension(:), intent(inout) :: dump_surf_uy
+    real(kind=CUSTOM_REAL), dimension(:), intent(inout) :: dump_surf_uz
+    integer, intent(in) :: i_frame
+    integer, intent(in) :: it_first_surf
+
+    integer :: msg_size, ista, data_len, req_dummy
+    integer :: it_val
+    integer :: data_size
+    logical :: dset_exists
+    character(len=MAX_STRING_LEN) :: dset_full_name
+
+    ! get message size
+    call world_get_size_msg(status, msg_size)
+
+    ! size of one data element in bytes
+    data_size = CUSTOM_REAL
+
+    ! compute actual time-step index for this frame
+    it_val = it_first_surf + i_frame * NTSTEP_BETWEEN_FRAMES
+
+    ! construct file and group names
+    file_name = trim(OUTPUT_FILES)//"/movie_surface.h5"
+    group_name = "it_"//trim(i2c(it_val))
+
+    ! open file
+    if (H5_COL) then
+      call h5_open_file_p_collect(file_name)
+    else
+      call h5_open_file_p(file_name)
+    endif
+
+    ! ensure group and datasets exist (defensive in case pre-creation was skipped)
+    if (myrank == 0) then
+      call h5_open_or_create_group(group_name)
+
+      dset_full_name = trim(group_name)//'/ux'
+      call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+      if (.not. dset_exists) then
+        call h5_create_dataset_gen_in_group('ux', (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
+      endif
+
+      dset_full_name = trim(group_name)//'/uy'
+      call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+      if (.not. dset_exists) then
+        call h5_create_dataset_gen_in_group('uy', (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
+      endif
+
+      dset_full_name = trim(group_name)//'/uz'
+      call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+      if (.not. dset_exists) then
+        call h5_create_dataset_gen_in_group('uz', (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
+      endif
+
+      call h5_close_group()
+    endif
+
+    call synchronize_all()
+
+    ! open group collectively
+    call h5_open_group(group_name)
+
+    ! receive and write according to tag
+    ista = sum(offset_poin(0:tag_src-1))
+    data_len = offset_poin(tag_src)
+
+    if (tag == io_tag_surf_ux) then
+      call irecvv_cr_inter(dump_surf_ux(1:data_len), msg_size, tag_src, tag, req_dummy)
+      call start_timer()
+      call h5_write_dataset_collect_hyperslab_in_group("ux", dump_surf_ux(1:data_len), (/ista/), H5_COL)
+      call stop_timer()
+    else if (tag == io_tag_surf_uy) then
+      call irecvv_cr_inter(dump_surf_uy(1:data_len), msg_size, tag_src, tag, req_dummy)
+      call start_timer()
+      call h5_write_dataset_collect_hyperslab_in_group("uy", dump_surf_uy(1:data_len), (/ista/), H5_COL)
+      call stop_timer()
+    else if (tag == io_tag_surf_uz) then
+      call irecvv_cr_inter(dump_surf_uz(1:data_len), msg_size, tag_src, tag, req_dummy)
+      call start_timer()
+      call h5_write_dataset_collect_hyperslab_in_group("uz", dump_surf_uz(1:data_len), (/ista/), H5_COL)
+      call stop_timer()
+    else
+      print *, 'Error: unknown surface movie tag in recv_and_write_surface_movie'
+      stop 'Error: unknown surface movie tag in recv_and_write_surface_movie'
+    end if
+
+    ! count bytes written for this surface movie message
+    call set_bytes_written_from_array(data_size*8, msg_size)
+
+    ! close group and file
+    call h5_close_group()
+    call h5_close_file_p()
+
+  end subroutine recv_and_write_surface_movie
+
+!
+!-------------------------------------------------------------------------------------------------
+!
+
+  subroutine recv_and_write_volume_movie(tag, tag_src, status, &
+                                         dump_vol1, dump_vol2, dump_vol3, &
+                                         dump_vol4, dump_vol5, dump_vol6, &
+                                         i_frame, it_first_vol)
+
+    use specfem_par
+    use specfem_par_movie_hdf5
+    use manager_hdf5
+    use constants, only: CUSTOM_REAL, my_status_size
+    use io_bandwidth
+
+    implicit none
+
+    integer, intent(in) :: tag, tag_src
+    integer, intent(in) :: status(my_status_size)
+    real(kind=CUSTOM_REAL), dimension(:), intent(inout) :: dump_vol1
+    real(kind=CUSTOM_REAL), dimension(:), intent(inout) :: dump_vol2
+    real(kind=CUSTOM_REAL), dimension(:), intent(inout) :: dump_vol3
+    real(kind=CUSTOM_REAL), dimension(:), intent(inout) :: dump_vol4
+    real(kind=CUSTOM_REAL), dimension(:), intent(inout) :: dump_vol5
+    real(kind=CUSTOM_REAL), dimension(:), intent(inout) :: dump_vol6
+    integer, intent(in) :: i_frame
+    integer, intent(in) :: it_first_vol
+
+    integer :: msg_size, ista, data_len, req_dummy
+    integer :: it_val
+    character(len=2) :: movie_prefix2
+    character(len=MAX_STRING_LEN) :: dset_name
+    integer :: data_size
+
+    ! get message size
+    call world_get_size_msg(status, msg_size)
+
+    ! size of one data element in bytes
+    data_size = CUSTOM_REAL
+
+    ! compute actual time-step index for this frame
+    it_val = it_first_vol + i_frame * NTSTEP_BETWEEN_FRAMES
+
+    ! construct file and group names
+    file_name = trim(OUTPUT_FILES)//"/movie_volume.h5"
+    group_name = "it_"//trim(i2c(it_val))
+
+    ! open file
+    if (H5_COL) then
+      call h5_open_file_p_collect(file_name)
+    else
+      call h5_open_file_p(file_name)
+    endif
+
+    ! open group collectively (group and datasets have been created beforehand)
+    call h5_open_group(group_name)
+
+    ista = sum(offset_poin_vol(0:tag_src-1))
+    data_len = offset_poin_vol(tag_src)
+
+    select case (MOVIE_VOLUME_TYPE)
+    case (1,2,3)
+      if (MOVIE_VOLUME_TYPE == 1) then
+        movie_prefix2 = 'E '
+      else if (MOVIE_VOLUME_TYPE == 2) then
+        movie_prefix2 = 'S '
+      else
+        movie_prefix2 = 'P '
+      endif
+
+      if (tag == io_tag_vol_strain_NN) then
+        call irecvv_cr_inter(dump_vol1(1:data_len), msg_size, tag_src, tag, req_dummy)
+        dset_name = trim(movie_prefix2)//'NN'
+        call start_timer()
+        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol1(1:data_len), (/ista/), H5_COL)
+        call stop_timer()
+      else if (tag == io_tag_vol_strain_EE) then
+        call irecvv_cr_inter(dump_vol2(1:data_len), msg_size, tag_src, tag, req_dummy)
+        dset_name = trim(movie_prefix2)//'EE'
+        call start_timer()
+        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol2(1:data_len), (/ista/), H5_COL)
+        call stop_timer()
+      else if (tag == io_tag_vol_strain_ZZ) then
+        call irecvv_cr_inter(dump_vol3(1:data_len), msg_size, tag_src, tag, req_dummy)
+        dset_name = trim(movie_prefix2)//'ZZ'
+        call start_timer()
+        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol3(1:data_len), (/ista/), H5_COL)
+        call stop_timer()
+      else if (tag == io_tag_vol_strain_NE) then
+        call irecvv_cr_inter(dump_vol4(1:data_len), msg_size, tag_src, tag, req_dummy)
+        dset_name = trim(movie_prefix2)//'NE'
+        call start_timer()
+        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol4(1:data_len), (/ista/), H5_COL)
+        call stop_timer()
+      else if (tag == io_tag_vol_strain_NZ) then
+        call irecvv_cr_inter(dump_vol5(1:data_len), msg_size, tag_src, tag, req_dummy)
+        dset_name = trim(movie_prefix2)//'NZ'
+        call start_timer()
+        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol5(1:data_len), (/ista/), H5_COL)
+        call stop_timer()
+      else if (tag == io_tag_vol_strain_EZ) then
+        call irecvv_cr_inter(dump_vol6(1:data_len), msg_size, tag_src, tag, req_dummy)
+        dset_name = trim(movie_prefix2)//'EZ'
+        call start_timer()
+        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol6(1:data_len), (/ista/), H5_COL)
+        call stop_timer()
+      else
+        print *, 'Error: unknown volume strain tag in recv_and_write_volume_movie'
+        stop 'Error: unknown volume strain tag in recv_and_write_volume_movie'
+      end if
+
+    case (5,6)
+      if (MOVIE_VOLUME_TYPE == 5) then
+        movie_prefix2 = 'DI'
+      else
+        movie_prefix2 = 'VE'
+      endif
+
+      if (tag == io_tag_vol_vec_N) then
+        call irecvv_cr_inter(dump_vol1(1:data_len), msg_size, tag_src, tag, req_dummy)
+        dset_name = trim(movie_prefix2)//'N'
+        call start_timer()
+        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol1(1:data_len), (/ista/), H5_COL)
+        call stop_timer()
+      else if (tag == io_tag_vol_vec_E) then
+        call irecvv_cr_inter(dump_vol2(1:data_len), msg_size, tag_src, tag, req_dummy)
+        dset_name = trim(movie_prefix2)//'E'
+        call start_timer()
+        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol2(1:data_len), (/ista/), H5_COL)
+        call stop_timer()
+      else if (tag == io_tag_vol_vec_Z) then
+        call irecvv_cr_inter(dump_vol3(1:data_len), msg_size, tag_src, tag, req_dummy)
+        dset_name = trim(movie_prefix2)//'Z'
+        call start_timer()
+        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol3(1:data_len), (/ista/), H5_COL)
+        call stop_timer()
+      else
+        print *, 'Error: unknown volume vector tag in recv_and_write_volume_movie'
+        stop 'Error: unknown volume vector tag in recv_and_write_volume_movie'
+      end if
+
+    case default
+      ! other volume movie types are currently not handled by IO server
+      print *, 'Error: MOVIE_VOLUME_TYPE not supported in recv_and_write_volume_movie'
+      stop 'Error: MOVIE_VOLUME_TYPE not supported in recv_and_write_volume_movie'
+    end select
+
+    ! count bytes written for this volume movie message
+    call set_bytes_written_from_array(data_size*8, msg_size)
+
+    ! close group and file
+    call h5_close_group()
+    call h5_close_file_p()
+
+  end subroutine recv_and_write_volume_movie
 
 !
 !-------------------------------------------------------------------------------------------------

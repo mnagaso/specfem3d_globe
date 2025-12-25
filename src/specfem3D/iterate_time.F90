@@ -47,6 +47,8 @@
   ! hdf5 i/o server
   if (HDF5_IO_NODES > 0) then
     if (IO_storage_task) then
+      ! IO tasks receive metadata from compute tasks, then start idle loop
+      call get_info_from_comp()
       call do_io_start_idle()
     else
       ! compute node passes necessary info to io node
