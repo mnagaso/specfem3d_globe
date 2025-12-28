@@ -1593,7 +1593,7 @@ contains
     implicit none
     integer(hsize_t), parameter :: buf_size  = 1*1024*1024   ! 1 MB
     integer(hsize_t), parameter :: alig_size = 1*1024*1024   ! 1 MB
-    call h5pset_sieve_buf_size_f(fplist_id, buf_size, error) ! buf_size may vary depending on machiens
+    call h5pset_sieve_buf_size_f(fplist_id, buf_size, error) ! buf_size may vary depending on machines
     call check_error()
     call h5pset_alignment_f(fplist_id, buf_size, alig_size, error)
     call check_error()

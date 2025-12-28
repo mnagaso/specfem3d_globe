@@ -695,7 +695,7 @@ contains
   n_msg_vol         = 0
   max_vol_points    = 0
   it_first_vol      = 0
-    vol_group_frame_prepared = -1
+  vol_group_frame_prepared = -1
 
 
   !
@@ -827,22 +827,28 @@ contains
              (MOVIE_VOLUME .and. HDF5_ENABLED .and. vol_frame_count  < max_vol_frames) )
 
     ! for surface movies, create the HDF5 group and datasets once per frame
-    if (MOVIE_SURFACE .and. HDF5_ENABLED) then
+    if (MOVIE_SURFACE) then
       if (max_surf_frames > 0 .and. n_msg_surf > 0) then
         if (surf_frame_count < max_surf_frames .and. n_recv_msg_surf == 0 .and. &
             surf_group_frame_prepared /= surf_frame_count) then
-          call create_surface_frame_group(surf_frame_count, it_first_surf)
+          if (myrank == 0) then
+            call create_surface_frame_group(surf_frame_count, it_first_surf)
+          endif
+          call synchronize_all()
           surf_group_frame_prepared = surf_frame_count
         endif
       endif
     endif
 
     ! for volume movies, create the HDF5 group and datasets once per frame
-    if (MOVIE_VOLUME .and. HDF5_ENABLED) then
+    if (MOVIE_VOLUME) then
       if (max_vol_frames > 0 .and. n_msg_vol > 0) then
         if (vol_frame_count < max_vol_frames .and. n_recv_msg_vol == 0 .and. &
             vol_group_frame_prepared /= vol_frame_count) then
-          call create_volume_frame_group(vol_frame_count, it_first_vol)
+          if (myrank == 0) then
+            call create_volume_frame_group(vol_frame_count, it_first_vol)
+          endif
+          call synchronize_all()
           vol_group_frame_prepared = vol_frame_count
         endif
       endif
@@ -943,7 +949,6 @@ contains
         endif
       endif
     endif
-
 
   enddo
   !
@@ -1647,9 +1652,10 @@ contains
 
 #ifdef USE_HDF5
 
-    use specfem_par
+  use specfem_par
     use specfem_par_movie_hdf5
     use manager_hdf5
+  use constants, only: myrank
 
     implicit none
 
@@ -1658,6 +1664,12 @@ contains
 
     integer :: it_val
 
+    ! safety: this routine must only be called on rank 0
+    if (myrank > 0) then
+      print *, 'Error: create_surface_frame_group called from rank ', myrank
+      stop 'create_surface_frame_group must be called only on rank 0'
+    endif
+
     ! compute actual time-step index for this frame
     it_val = it_first_surf + i_frame * NTSTEP_BETWEEN_FRAMES
 
@@ -1665,27 +1677,15 @@ contains
     file_name = trim(OUTPUT_FILES)//"/movie_surface.h5"
     group_name = "it_"//trim(i2c(it_val))
 
-    ! open file
-    if (H5_COL) then
-      call h5_open_file_p_collect(file_name)
-    else
-      call h5_open_file_p(file_name)
-    endif
-
-    ! create group and datasets on rank 0
-    if (myrank == 0) then
-      call h5_create_group(group_name)
-      call h5_open_group(group_name)
-      call h5_create_dataset_gen_in_group("ux", (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
-      call h5_create_dataset_gen_in_group("uy", (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
-      call h5_create_dataset_gen_in_group("uz", (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
-      call h5_close_group()
-    endif
-
-    call synchronize_all()
-
-    ! close file
-    call h5_close_file_p()
+    ! open file in serial mode and create group/datasets
+    call h5_open_file(file_name)
+    call h5_create_group(group_name)
+    call h5_open_group(group_name)
+    call h5_create_dataset_gen_in_group("ux", (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
+    call h5_create_dataset_gen_in_group("uy", (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
+    call h5_create_dataset_gen_in_group("uz", (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
+    call h5_close_group()
+    call h5_close_file()
 
 #endif
 
@@ -1698,9 +1698,10 @@ contains
 
 #ifdef USE_HDF5
 
-    use specfem_par
+  use specfem_par
     use specfem_par_movie_hdf5
     use manager_hdf5
+  use constants, only: myrank
 
     implicit none
 
@@ -1712,6 +1713,12 @@ contains
     logical :: dset_exists
     character(len=MAX_STRING_LEN) :: dset_full_name
 
+    ! safety: this routine must only be called on rank 0
+    if (myrank > 0) then
+      print *, 'Error: create_volume_frame_group called from rank ', myrank
+      stop 'create_volume_frame_group must be called only on rank 0'
+    endif
+
     ! compute actual time-step index for this frame
     it_val = it_first_vol + i_frame * NTSTEP_BETWEEN_FRAMES
 
@@ -1719,99 +1726,87 @@ contains
     file_name = trim(OUTPUT_FILES)//"/movie_volume.h5"
     group_name = "it_"//trim(i2c(it_val))
 
-    ! open file collectively
-    if (H5_COL) then
-      call h5_open_file_p_collect(file_name)
-    else
-      call h5_open_file_p(file_name)
-    endif
+    ! open file in serial mode and create group/datasets
+    call h5_open_file(file_name)
+    call h5_open_or_create_group(group_name)
 
-    ! create group and datasets on rank 0
-    if (myrank == 0) then
-      call h5_open_or_create_group(group_name)
+    select case (MOVIE_VOLUME_TYPE)
+    case (1,2,3)
+      ! strains / time-integrated / potency at movie points
+      if (MOVIE_VOLUME_TYPE == 1) then
+        movie_prefix2 = 'E '
+      else if (MOVIE_VOLUME_TYPE == 2) then
+        movie_prefix2 = 'S '
+      else
+        movie_prefix2 = 'P '
+      endif
 
-      select case (MOVIE_VOLUME_TYPE)
-      case (1,2,3)
-        ! strains / time-integrated / potency at movie points
-        if (MOVIE_VOLUME_TYPE == 1) then
-          movie_prefix2 = 'E '
-        else if (MOVIE_VOLUME_TYPE == 2) then
-          movie_prefix2 = 'S '
-        else
-          movie_prefix2 = 'P '
-        endif
+      ! create datasets only if they do not already exist
+      dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'NN'
+      call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+      if (.not. dset_exists) then
+        call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'NN', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+      endif
 
-        ! create datasets only if they do not already exist
-        dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'NN'
-        call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
-        if (.not. dset_exists) then
-          call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'NN', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
-        endif
+      dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'EE'
+      call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+      if (.not. dset_exists) then
+        call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'EE', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+      endif
 
-        dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'EE'
-        call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
-        if (.not. dset_exists) then
-          call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'EE', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
-        endif
+      dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'ZZ'
+      call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+      if (.not. dset_exists) then
+        call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'ZZ', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+      endif
 
-        dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'ZZ'
-        call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
-        if (.not. dset_exists) then
-          call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'ZZ', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
-        endif
+      dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'NE'
+      call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+      if (.not. dset_exists) then
+        call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'NE', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+      endif
 
-        dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'NE'
-        call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
-        if (.not. dset_exists) then
-          call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'NE', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
-        endif
+      dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'NZ'
+      call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+      if (.not. dset_exists) then
+        call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'NZ', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+      endif
 
-        dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'NZ'
-        call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
-        if (.not. dset_exists) then
-          call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'NZ', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
-        endif
+      dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'EZ'
+      call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+      if (.not. dset_exists) then
+        call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'EZ', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+      endif
 
-        dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'EZ'
-        call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
-        if (.not. dset_exists) then
-          call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'EZ', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
-        endif
+    case (5,6)
+      ! displacement / velocity vectors at movie points
+      if (MOVIE_VOLUME_TYPE == 5) then
+        movie_prefix2 = 'DI'
+      else
+        movie_prefix2 = 'VE'
+      endif
 
-      case (5,6)
-        ! displacement / velocity vectors at movie points
-        if (MOVIE_VOLUME_TYPE == 5) then
-          movie_prefix2 = 'DI'
-        else
-          movie_prefix2 = 'VE'
-        endif
+      dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'N'
+      call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+      if (.not. dset_exists) then
+        call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'N', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+      endif
 
-        dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'N'
-        call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
-        if (.not. dset_exists) then
-          call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'N', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
-        endif
+      dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'E'
+      call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+      if (.not. dset_exists) then
+        call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'E', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+      endif
 
-        dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'E'
-        call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
-        if (.not. dset_exists) then
-          call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'E', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
-        endif
+      dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'Z'
+      call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+      if (.not. dset_exists) then
+        call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'Z', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+      endif
+    end select
 
-        dset_full_name = trim(group_name)//'/'//trim(movie_prefix2)//'Z'
-        call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
-        if (.not. dset_exists) then
-          call h5_create_dataset_gen_in_group(trim(movie_prefix2)//'Z', (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
-        endif
-      end select
-
-      call h5_close_group()
-    endif
-
-    call synchronize_all()
-
-    ! close file
-    call h5_close_file_p()
+    call h5_close_group()
+    call h5_close_file()
 
 #endif
 
