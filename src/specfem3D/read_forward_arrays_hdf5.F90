@@ -373,6 +373,8 @@
   ! full gravity
   integer :: b_neq_read, b_neq1_read
 
+  logical :: file_exists
+
   ! MPI variables
   !integer :: info, comm
 
@@ -411,103 +413,214 @@
   write(file_name, '(a,i6.6,a)') 'save_frame_at',iteration_on_subset_tmp,'.h5'
   file_name = trim(LOCAL_PATH)//'/'//trim(file_name)
 
-  ! get MPI parameters
-  call world_get_comm(comm)
-  call world_get_info_null(info)
-
-  ! initialize HDF5
-  call h5_initialize() ! called in initialize_mesher()
-  ! set MPI
-  call h5_set_mpi_info(comm, info, myrank, NPROCTOT_VAL)
-
-  ! open the file
-  if (H5_COL) then
-    ! open file
-    call h5_open_file_p_collect(file_name)
+  ! for multi-IO runs, check if a single shared checkpoint file
+  ! exists; if not, we assume per-IO shard files and read from
+  ! the shard corresponding to this rank's IO node.
+  if (HDF5_IO_NODES > 1) then
+    inquire(file=trim(file_name), exist=file_exists)
   else
-    ! open file
-    call h5_open_file_p(file_name)
-  endif
-  ! read the arrays
-  call h5_read_dataset_collect_hyperslab('displ_crust_mantle', b_displ_crust_mantle, (/0,sum(offset_nglob_cm(0:myrank-1))/), H5_COL)
-  call h5_read_dataset_collect_hyperslab('displ_outer_core',   b_displ_outer_core,   (/sum(offset_nglob_oc(0:myrank-1))/), H5_COL)
-  call h5_read_dataset_collect_hyperslab('displ_inner_core',   b_displ_inner_core,   (/0,sum(offset_nglob_ic(0:myrank-1))/), H5_COL)
-  call h5_read_dataset_collect_hyperslab('veloc_crust_mantle', b_veloc_crust_mantle, (/0,sum(offset_nglob_cm(0:myrank-1))/), H5_COL)
-  call h5_read_dataset_collect_hyperslab('veloc_outer_core',   b_veloc_outer_core,   (/sum(offset_nglob_oc(0:myrank-1))/), H5_COL)
-  call h5_read_dataset_collect_hyperslab('veloc_inner_core',   b_veloc_inner_core,   (/0,sum(offset_nglob_ic(0:myrank-1))/), H5_COL)
-  call h5_read_dataset_collect_hyperslab('accel_crust_mantle', b_accel_crust_mantle, (/0,sum(offset_nglob_cm(0:myrank-1))/), H5_COL)
-  call h5_read_dataset_collect_hyperslab('accel_outer_core',   b_accel_outer_core,   (/sum(offset_nglob_oc(0:myrank-1))/), H5_COL)
-  call h5_read_dataset_collect_hyperslab('accel_inner_core',   b_accel_inner_core,   (/0,sum(offset_nglob_ic(0:myrank-1))/), H5_COL)
-  call h5_read_dataset_collect_hyperslab('epsilondev_xx_crust_mantle', b_epsilondev_xx_crust_mantle, &
-                                         (/0,0,0,sum(offset_nspec_cm_soa(0:myrank-1))/), H5_COL)
-  call h5_read_dataset_collect_hyperslab('epsilondev_yy_crust_mantle', b_epsilondev_yy_crust_mantle, &
-                                         (/0,0,0,sum(offset_nspec_cm_soa(0:myrank-1))/), H5_COL)
-  call h5_read_dataset_collect_hyperslab('epsilondev_xy_crust_mantle', b_epsilondev_xy_crust_mantle, &
-                                         (/0,0,0,sum(offset_nspec_cm_soa(0:myrank-1))/), H5_COL)
-  call h5_read_dataset_collect_hyperslab('epsilondev_xz_crust_mantle', b_epsilondev_xz_crust_mantle, &
-                                         (/0,0,0,sum(offset_nspec_cm_soa(0:myrank-1))/), H5_COL)
-  call h5_read_dataset_collect_hyperslab('epsilondev_yz_crust_mantle', b_epsilondev_yz_crust_mantle, &
-                                         (/0,0,0,sum(offset_nspec_cm_soa(0:myrank-1))/), H5_COL)
-  call h5_read_dataset_collect_hyperslab('epsilondev_xx_inner_core',   b_epsilondev_xx_inner_core, &
-                                         (/0,0,0,sum(offset_nspec_ic_soa(0:myrank-1))/), H5_COL)
-  call h5_read_dataset_collect_hyperslab('epsilondev_yy_inner_core',   b_epsilondev_yy_inner_core, &
-                                         (/0,0,0,sum(offset_nspec_ic_soa(0:myrank-1))/), H5_COL)
-  call h5_read_dataset_collect_hyperslab('epsilondev_xy_inner_core',   b_epsilondev_xy_inner_core, &
-                                         (/0,0,0,sum(offset_nspec_ic_soa(0:myrank-1))/), H5_COL)
-  call h5_read_dataset_collect_hyperslab('epsilondev_xz_inner_core',   b_epsilondev_xz_inner_core, &
-                                         (/0,0,0,sum(offset_nspec_ic_soa(0:myrank-1))/), H5_COL)
-  call h5_read_dataset_collect_hyperslab('epsilondev_yz_inner_core',   b_epsilondev_yz_inner_core, &
-                                         (/0,0,0,sum(offset_nspec_ic_soa(0:myrank-1))/), H5_COL)
-
-  if (ROTATION_VAL) then
-    call h5_read_dataset_collect_hyperslab('A_array_rotation', b_A_array_rotation, &
-                                           (/0,0,0,sum(offset_nspec_oc_rot(0:myrank-1))/), H5_COL)
-    call h5_read_dataset_collect_hyperslab('A_array_rotation', b_B_array_rotation, &
-                                           (/0,0,0,sum(offset_nspec_oc_rot(0:myrank-1))/), H5_COL)
+    file_exists = .true.
   endif
 
-  if (ATTENUATION_VAL) then
-    call h5_read_dataset_collect_hyperslab('R_xx_crust_mantle', b_R_xx_crust_mantle, &
-                                           (/0,0,0,0,sum(offset_nspec_cm_att(0:myrank-1))/), H5_COL)
-    call h5_read_dataset_collect_hyperslab('R_yy_crust_mantle', b_R_yy_crust_mantle, &
-                                           (/0,0,0,0,sum(offset_nspec_cm_att(0:myrank-1))/), H5_COL)
-    call h5_read_dataset_collect_hyperslab('R_xy_crust_mantle', b_R_xy_crust_mantle, &
-                                           (/0,0,0,0,sum(offset_nspec_cm_att(0:myrank-1))/), H5_COL)
-    call h5_read_dataset_collect_hyperslab('R_xz_crust_mantle', b_R_xz_crust_mantle, &
-                                           (/0,0,0,0,sum(offset_nspec_cm_att(0:myrank-1))/), H5_COL)
-    call h5_read_dataset_collect_hyperslab('R_yz_crust_mantle', b_R_yz_crust_mantle, &
-                                           (/0,0,0,0,sum(offset_nspec_cm_att(0:myrank-1))/), H5_COL)
-    call h5_read_dataset_collect_hyperslab('R_xx_inner_core',   b_R_xx_inner_core, &
-                                           (/0,0,0,0,sum(offset_nspec_ic_att(0:myrank-1))/), H5_COL)
-    call h5_read_dataset_collect_hyperslab('R_yy_inner_core',   b_R_yy_inner_core, &
-                                           (/0,0,0,0,sum(offset_nspec_ic_att(0:myrank-1))/), H5_COL)
-    call h5_read_dataset_collect_hyperslab('R_xy_inner_core',   b_R_xy_inner_core, &
-                                           (/0,0,0,0,sum(offset_nspec_ic_att(0:myrank-1))/), H5_COL)
-    call h5_read_dataset_collect_hyperslab('R_xz_inner_core',   b_R_xz_inner_core, &
-                                           (/0,0,0,0,sum(offset_nspec_ic_att(0:myrank-1))/), H5_COL)
-    call h5_read_dataset_collect_hyperslab('R_yz_inner_core',   b_R_yz_inner_core, &
-                                           (/0,0,0,0,sum(offset_nspec_ic_att(0:myrank-1))/), H5_COL)
-  endif
+  if (file_exists .or. HDF5_IO_NODES <= 1) then
 
-  if (FULL_GRAVITY_VAL) then
-    call h5_read_dataset_scalar_collect_hyperslab('neq', b_neq_read, (/myrank/), H5_COL)
-    call h5_read_dataset_scalar_collect_hyperslab('neq1', b_neq1_read, (/myrank/), H5_COL)
+    !---- Original single-file parallel HDF5 path ----
 
-    ! check if array sizes match
-    if (b_neq_read /= neq) then
-      print *,'Error reading forward array for startrun: rank ',myrank,'has read neq =',b_neq_read,' - shoud be ',neq
-      call exit_MPI(myrank,'Invalid forward array neq for startrun')
-    endif
-    if (b_neq1_read /= neq1) then
-      print *,'Error reading forward array for startrun: rank ',myrank,'has read neq1 =',b_neq1_read,' - shoud be ',neq1
-      call exit_MPI(myrank,'Invalid forward array neq1 for startrun')
+    ! get MPI parameters
+    call world_get_comm(comm)
+    call world_get_info_null(info)
+
+    ! initialize HDF5
+    call h5_initialize() ! called in initialize_mesher()
+    ! set MPI
+    call h5_set_mpi_info(comm, info, myrank, NPROCTOT_VAL)
+
+    ! open the file
+    if (H5_COL) then
+      ! open file
+      call h5_open_file_p_collect(file_name)
+    else
+      ! open file
+      call h5_open_file_p(file_name)
     endif
 
-    call h5_read_dataset_collect_hyperslab('pgrav1', b_pgrav1, (/0,sum(offset_pgrav1(0:myrank-1))/), H5_COL)
-  endif
+    ! read the arrays
+    call h5_read_dataset_collect_hyperslab('displ_crust_mantle', b_displ_crust_mantle, (/0,sum(offset_nglob_cm(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('displ_outer_core',   b_displ_outer_core,   (/sum(offset_nglob_oc(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('displ_inner_core',   b_displ_inner_core,   (/0,sum(offset_nglob_ic(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('veloc_crust_mantle', b_veloc_crust_mantle, (/0,sum(offset_nglob_cm(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('veloc_outer_core',   b_veloc_outer_core,   (/sum(offset_nglob_oc(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('veloc_inner_core',   b_veloc_inner_core,   (/0,sum(offset_nglob_ic(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('accel_crust_mantle', b_accel_crust_mantle, (/0,sum(offset_nglob_cm(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('accel_outer_core',   b_accel_outer_core,   (/sum(offset_nglob_oc(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('accel_inner_core',   b_accel_inner_core,   (/0,sum(offset_nglob_ic(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('epsilondev_xx_crust_mantle', b_epsilondev_xx_crust_mantle, &
+                                           (/0,0,0,sum(offset_nspec_cm_soa(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('epsilondev_yy_crust_mantle', b_epsilondev_yy_crust_mantle, &
+                                           (/0,0,0,sum(offset_nspec_cm_soa(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('epsilondev_xy_crust_mantle', b_epsilondev_xy_crust_mantle, &
+                                           (/0,0,0,sum(offset_nspec_cm_soa(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('epsilondev_xz_crust_mantle', b_epsilondev_xz_crust_mantle, &
+                                           (/0,0,0,sum(offset_nspec_cm_soa(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('epsilondev_yz_crust_mantle', b_epsilondev_yz_crust_mantle, &
+                                           (/0,0,0,sum(offset_nspec_cm_soa(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('epsilondev_xx_inner_core',   b_epsilondev_xx_inner_core, &
+                                           (/0,0,0,sum(offset_nspec_ic_soa(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('epsilondev_yy_inner_core',   b_epsilondev_yy_inner_core, &
+                                           (/0,0,0,sum(offset_nspec_ic_soa(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('epsilondev_xy_inner_core',   b_epsilondev_xy_inner_core, &
+                                           (/0,0,0,sum(offset_nspec_ic_soa(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('epsilondev_xz_inner_core',   b_epsilondev_xz_inner_core, &
+                                           (/0,0,0,sum(offset_nspec_ic_soa(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('epsilondev_yz_inner_core',   b_epsilondev_yz_inner_core, &
+                         (/0,0,0,sum(offset_nspec_ic_soa(0:myrank-1))/), H5_COL)
 
-  ! close the file
-  call h5_close_file_p()
+    if (ROTATION_VAL) then
+      call h5_read_dataset_collect_hyperslab('A_array_rotation', b_A_array_rotation, &
+                                             (/0,0,0,sum(offset_nspec_oc_rot(0:myrank-1))/), H5_COL)
+      call h5_read_dataset_collect_hyperslab('A_array_rotation', b_B_array_rotation, &
+                                             (/0,0,0,sum(offset_nspec_oc_rot(0:myrank-1))/), H5_COL)
+    endif
+
+    if (ATTENUATION_VAL) then
+      call h5_read_dataset_collect_hyperslab('R_xx_crust_mantle', b_R_xx_crust_mantle, &
+                                             (/0,0,0,0,sum(offset_nspec_cm_att(0:myrank-1))/), H5_COL)
+      call h5_read_dataset_collect_hyperslab('R_yy_crust_mantle', b_R_yy_crust_mantle, &
+                                             (/0,0,0,0,sum(offset_nspec_cm_att(0:myrank-1))/), H5_COL)
+      call h5_read_dataset_collect_hyperslab('R_xy_crust_mantle', b_R_xy_crust_mantle, &
+                                             (/0,0,0,0,sum(offset_nspec_cm_att(0:myrank-1))/), H5_COL)
+      call h5_read_dataset_collect_hyperslab('R_xz_crust_mantle', b_R_xz_crust_mantle, &
+                                             (/0,0,0,0,sum(offset_nspec_cm_att(0:myrank-1))/), H5_COL)
+      call h5_read_dataset_collect_hyperslab('R_yz_crust_mantle', b_R_yz_crust_mantle, &
+                                             (/0,0,0,0,sum(offset_nspec_cm_att(0:myrank-1))/), H5_COL)
+      call h5_read_dataset_collect_hyperslab('R_xx_inner_core',   b_R_xx_inner_core, &
+                                             (/0,0,0,0,sum(offset_nspec_ic_att(0:myrank-1))/), H5_COL)
+      call h5_read_dataset_collect_hyperslab('R_yy_inner_core',   b_R_yy_inner_core, &
+                                             (/0,0,0,0,sum(offset_nspec_ic_att(0:myrank-1))/), H5_COL)
+      call h5_read_dataset_collect_hyperslab('R_xy_inner_core',   b_R_xy_inner_core, &
+                                             (/0,0,0,0,sum(offset_nspec_ic_att(0:myrank-1))/), H5_COL)
+      call h5_read_dataset_collect_hyperslab('R_xz_inner_core',   b_R_xz_inner_core, &
+                                             (/0,0,0,0,sum(offset_nspec_ic_att(0:myrank-1))/), H5_COL)
+      call h5_read_dataset_collect_hyperslab('R_yz_inner_core',   b_R_yz_inner_core, &
+                                             (/0,0,0,0,sum(offset_nspec_ic_att(0:myrank-1))/), H5_COL)
+    endif
+
+    if (FULL_GRAVITY_VAL) then
+      call h5_read_dataset_scalar_collect_hyperslab('neq', b_neq_read, (/myrank/), H5_COL)
+      call h5_read_dataset_scalar_collect_hyperslab('neq1', b_neq1_read, (/myrank/), H5_COL)
+
+      ! check if array sizes match
+      if (b_neq_read /= neq) then
+        print *,'Error reading forward array for startrun: rank ',myrank,'has read neq =',b_neq_read,' - shoud be ',neq
+        call exit_MPI(myrank,'Invalid forward array neq for startrun')
+      endif
+      if (b_neq1_read /= neq1) then
+        print *,'Error reading forward array for startrun: rank ',myrank,'has read neq1 =',b_neq1_read,' - shoud be ',neq1
+        call exit_MPI(myrank,'Invalid forward array neq1 for startrun')
+      endif
+
+      call h5_read_dataset_collect_hyperslab('pgrav1', b_pgrav1, (/0,sum(offset_pgrav1(0:myrank-1))/), H5_COL)
+    endif
+
+    ! close the file
+    call h5_close_file_p()
+
+  else
+
+    !---- Sharded per-IO checkpoint path (multi-IO, no single file) ----
+
+    ! Each rank reads its own slice from the shard corresponding to
+    ! its IO node. The mapping from compute ranks to IO ids is the
+    ! same as used when writing the shards.
+
+    write(file_name, '(a,i6.6,a,a,a)') 'save_frame_at',iteration_on_subset_tmp,'.io',trim(i2c(dest_ionod)),'.h5'
+    file_name = trim(LOCAL_PATH)//'/'//trim(file_name)
+
+    ! open shard file with serial HDF5
+    call h5_open_file(file_name)
+
+    ! read the arrays (non-collective)
+    call h5_read_dataset_collect_hyperslab('displ_crust_mantle', b_displ_crust_mantle, (/0,sum(offset_nglob_cm(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('displ_outer_core',   b_displ_outer_core,   (/sum(offset_nglob_oc(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('displ_inner_core',   b_displ_inner_core,   (/0,sum(offset_nglob_ic(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('veloc_crust_mantle', b_veloc_crust_mantle, (/0,sum(offset_nglob_cm(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('veloc_outer_core',   b_veloc_outer_core,   (/sum(offset_nglob_oc(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('veloc_inner_core',   b_veloc_inner_core,   (/0,sum(offset_nglob_ic(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('accel_crust_mantle', b_accel_crust_mantle, (/0,sum(offset_nglob_cm(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('accel_outer_core',   b_accel_outer_core,   (/sum(offset_nglob_oc(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('accel_inner_core',   b_accel_inner_core,   (/0,sum(offset_nglob_ic(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('epsilondev_xx_crust_mantle', b_epsilondev_xx_crust_mantle, &
+                                           (/0,0,0,sum(offset_nspec_cm_soa(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('epsilondev_yy_crust_mantle', b_epsilondev_yy_crust_mantle, &
+                                           (/0,0,0,sum(offset_nspec_cm_soa(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('epsilondev_xy_crust_mantle', b_epsilondev_xy_crust_mantle, &
+                                           (/0,0,0,sum(offset_nspec_cm_soa(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('epsilondev_xz_crust_mantle', b_epsilondev_xz_crust_mantle, &
+                                           (/0,0,0,sum(offset_nspec_cm_soa(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('epsilondev_yz_crust_mantle', b_epsilondev_yz_crust_mantle, &
+                                           (/0,0,0,sum(offset_nspec_cm_soa(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('epsilondev_xx_inner_core',   b_epsilondev_xx_inner_core, &
+                                           (/0,0,0,sum(offset_nspec_ic_soa(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('epsilondev_yy_inner_core',   b_epsilondev_yy_inner_core, &
+                                           (/0,0,0,sum(offset_nspec_ic_soa(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('epsilondev_xy_inner_core',   b_epsilondev_xy_inner_core, &
+                                           (/0,0,0,sum(offset_nspec_ic_soa(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('epsilondev_xz_inner_core',   b_epsilondev_xz_inner_core, &
+                                           (/0,0,0,sum(offset_nspec_ic_soa(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('epsilondev_yz_inner_core',   b_epsilondev_yz_inner_core, &
+                                           (/0,0,0,sum(offset_nspec_ic_soa(0:myrank-1))/), .false.)
+
+    if (ROTATION_VAL) then
+      call h5_read_dataset_collect_hyperslab('A_array_rotation', b_A_array_rotation, &
+                                             (/0,0,0,sum(offset_nspec_oc_rot(0:myrank-1))/), .false.)
+      call h5_read_dataset_collect_hyperslab('A_array_rotation', b_B_array_rotation, &
+                                             (/0,0,0,sum(offset_nspec_oc_rot(0:myrank-1))/), .false.)
+    endif
+
+    if (ATTENUATION_VAL) then
+      call h5_read_dataset_collect_hyperslab('R_xx_crust_mantle', b_R_xx_crust_mantle, &
+                                             (/0,0,0,0,sum(offset_nspec_cm_att(0:myrank-1))/), .false.)
+      call h5_read_dataset_collect_hyperslab('R_yy_crust_mantle', b_R_yy_crust_mantle, &
+                                             (/0,0,0,0,sum(offset_nspec_cm_att(0:myrank-1))/), .false.)
+      call h5_read_dataset_collect_hyperslab('R_xy_crust_mantle', b_R_xy_crust_mantle, &
+                                             (/0,0,0,0,sum(offset_nspec_cm_att(0:myrank-1))/), .false.)
+      call h5_read_dataset_collect_hyperslab('R_xz_crust_mantle', b_R_xz_crust_mantle, &
+                                             (/0,0,0,0,sum(offset_nspec_cm_att(0:myrank-1))/), .false.)
+      call h5_read_dataset_collect_hyperslab('R_yz_crust_mantle', b_R_yz_crust_mantle, &
+                                             (/0,0,0,0,sum(offset_nspec_cm_att(0:myrank-1))/), .false.)
+      call h5_read_dataset_collect_hyperslab('R_xx_inner_core',   b_R_xx_inner_core, &
+                                             (/0,0,0,0,sum(offset_nspec_ic_att(0:myrank-1))/), .false.)
+      call h5_read_dataset_collect_hyperslab('R_yy_inner_core',   b_R_yy_inner_core, &
+                                             (/0,0,0,0,sum(offset_nspec_ic_att(0:myrank-1))/), .false.)
+      call h5_read_dataset_collect_hyperslab('R_xy_inner_core',   b_R_xy_inner_core, &
+                                             (/0,0,0,0,sum(offset_nspec_ic_att(0:myrank-1))/), .false.)
+      call h5_read_dataset_collect_hyperslab('R_xz_inner_core',   b_R_xz_inner_core, &
+                                             (/0,0,0,0,sum(offset_nspec_ic_att(0:myrank-1))/), .false.)
+      call h5_read_dataset_collect_hyperslab('R_yz_inner_core',   b_R_yz_inner_core, &
+                                             (/0,0,0,0,sum(offset_nspec_ic_att(0:myrank-1))/), .false.)
+    endif
+
+    if (FULL_GRAVITY_VAL) then
+      call h5_read_dataset_scalar_collect_hyperslab('neq', b_neq_read, (/myrank/), .false.)
+      call h5_read_dataset_scalar_collect_hyperslab('neq1', b_neq1_read, (/myrank/), .false.)
+
+      ! check if array sizes match
+      if (b_neq_read /= neq) then
+        print *,'Error reading forward array for startrun: rank ',myrank,'has read neq =',b_neq_read,' - shoud be ',neq
+        call exit_MPI(myrank,'Invalid forward array neq for startrun')
+      endif
+      if (b_neq1_read /= neq1) then
+        print *,'Error reading forward array for startrun: rank ',myrank,'has read neq1 =',b_neq1_read,' - shoud be ',neq1
+        call exit_MPI(myrank,'Invalid forward array neq1 for startrun')
+      endif
+
+      call h5_read_dataset_collect_hyperslab('pgrav1', b_pgrav1, (/0,sum(offset_pgrav1(0:myrank-1))/), .false.)
+    endif
+
+    ! close shard file
+    call h5_close_file()
+
+  endif
 
 #else
   ! no HDF5 support

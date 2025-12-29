@@ -234,14 +234,11 @@
 
 #ifdef USE_HDF5
 
-  if (HDF5_IO_NODES > 0) then
+  ! Forward arrays use a simple parallel HDF5 file that is
+  ! independent of the IO server. Allow this path even when
+  ! HDF5_IO_NODES > 0 instead of aborting.
 
-    print *,'Error: HDF5 IOSERVER not implemented yet for save_forward_arrays_hdf5'
-    call exit_mpi(myrank,'Error: HDF5 IOSERVER not implemented yet')
-
-  else
-
-    file_name = LOCAL_TMP_PATH(1:len_trim(LOCAL_TMP_PATH))//'/save_forward_arrays.h5'
+  file_name = LOCAL_TMP_PATH(1:len_trim(LOCAL_TMP_PATH))//'/save_forward_arrays.h5'
 
     ! get MPI parameters
     call world_get_comm(comm)
@@ -395,8 +392,6 @@
     ! close file
     call h5_close_file_p()
 
-  endif ! HDF5_IO_NODES == 0
-
 #else
 
   print *,'Error: HDF5 not enabled in this version of the code'
@@ -437,6 +432,9 @@
   req_count = 1
 
   if (HDF5_IO_NODES > 0) then
+    ! debug: log start of undo send on compute side
+    print *, 'compute undo_send_start: subset', iteration_on_subset, 'rank', myrank, 'dest_ionod', dest_ionod
+
     ! wait for all the send requests to finish
     call wait_all_send()
 
@@ -554,6 +552,10 @@
     ! hdf5 i/o server
     ! store the number of mpi_isend reqs
     n_req_ford_undo = req_count - 1
+
+    ! debug: log completion of undo send on compute side
+    print *, 'compute undo_send_done: subset', iteration_on_subset, 'rank', myrank, 'dest_ionod', dest_ionod, &
+         'n_req_ford_undo', n_req_ford_undo
 
   else
     write(file_name, '(a,i6.6,a)') 'save_frame_at',iteration_on_subset,'.h5'

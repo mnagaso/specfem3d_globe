@@ -636,6 +636,9 @@
     ! ensure all previous nonblocking sends have completed
     call wait_all_send()
 
+    ! debug: log volume strain movie send on compute side
+    print *, 'compute vol_strain_send: it', it, 'rank', myrank, 'dest_ionod', dest_ionod, 'npoints', ipoints_3dmovie
+
     ! send strain components to IO server
     n_req_vol = 0
 

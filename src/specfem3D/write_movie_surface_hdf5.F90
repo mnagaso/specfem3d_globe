@@ -408,6 +408,9 @@ subroutine write_movie_surface_hdf5()
     ! wait for all previous send requests to finish
     call wait_all_send()
 
+    ! debug: log surface movie send on compute side
+    print *, 'compute surf_send: it', it, 'rank', myrank, 'dest_ionod', dest_ionod, 'npoints', ipoin
+
     ! send surface movie data to IO server
     call isend_cr_inter(store_val_ux,ipoin,dest_ionod, &
                         io_tag_surf_ux,req_dump_surf(req_count))

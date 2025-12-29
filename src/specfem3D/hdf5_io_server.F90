@@ -29,7 +29,7 @@ module io_server_hdf5
 
   use constants, only: CUSTOM_REAL
   use shared_parameters, only: HDF5_IO_NODES, &
-    IO_storage_task, IO_compute_task
+    IO_storage_task, IO_compute_task, H5_COL
 
   implicit none
 
@@ -192,6 +192,15 @@ module io_server_hdf5
   integer :: nproc_io
   ! id for io node
   integer :: my_io_id
+
+  ! mapping from IO nodes to the compute ranks they serve
+  ! size: (number of IO nodes) x (max number of compute ranks per IO node)
+  integer, allocatable :: io_compute_ranks(:,:)
+  integer, allocatable :: io_nproc_all(:)
+
+  ! ordered list of undo-attenuation MPI tags per snapshot
+  integer, allocatable :: undo_tag_list(:)
+  integer :: n_undo_tags
 
   ! verbose output (for debugging)
   logical, parameter :: VERBOSE = .true.
@@ -428,6 +437,7 @@ contains
   integer, dimension(sizeval) :: n_procs_on_node ! number of procs on each cluster node
   integer, dimension(:), allocatable :: n_ionode_on_cluster ! number of ionode on the cluster nodes
   integer :: i,j,c,n_cluster_node,my_cluster_id,n_rest_io,n_ionode,n_comp_node
+  integer :: comp_rank_counter, dest_io_id, idx
   real(kind=CUSTOM_REAL) :: io_ratio ! dum
   character(len=MAX_STRING_LEN), dimension(sizeval) :: dump_node_names ! names of cluster nodes
 
@@ -516,6 +526,18 @@ contains
 
   !! choose the io node from the last rank of each cluster node
   n_ionode = 0
+  comp_rank_counter = -1
+
+  ! allocate and initialize IO-to-compute mapping arrays
+  if (HDF5_IO_NODES > 0) then
+    if (.not. allocated(io_nproc_all)) then
+      allocate(io_nproc_all(HDF5_IO_NODES))
+    endif
+    if (.not. allocated(io_compute_ranks)) then
+      allocate(io_compute_ranks(HDF5_IO_NODES,sizeval))
+    endif
+    io_nproc_all(:) = 0
+  endif
   do i = 1, n_cluster_node
     c = 0
     ! number of compute node on this cluster node
@@ -544,12 +566,21 @@ contains
 
         else
           ! j is compute node
+          comp_rank_counter = comp_rank_counter + 1
+          dest_io_id = mod(c-1,n_ionode_on_cluster(i)) + n_ionode
+
+          if (HDF5_IO_NODES > 0) then
+            idx = io_nproc_all(dest_io_id+1) + 1
+            io_nproc_all(dest_io_id+1) = idx
+            io_compute_ranks(dest_io_id+1,idx) = comp_rank_counter
+          endif
+
           if (j-1 == myrank) then
             IO_storage_task = .false.
             IO_compute_task = .true.
             key          = 1
             ! set the destination of MPI communication
-            dest_ionod   = mod(c-1,n_ionode_on_cluster(i)) + n_ionode
+            dest_ionod   = dest_io_id
           endif
         endif
       endif
@@ -604,6 +635,7 @@ contains
 
   use specfem_par
   use specfem_par_movie_hdf5
+  use manager_hdf5
   use constants, only: myrank, my_status_size, my_status_source, my_status_tag
 
   use io_bandwidth
@@ -664,15 +696,6 @@ contains
 
   integer :: i_out
 
-  ! initialize HDF5 MPI context on IO storage tasks
-  if (HDF5_ENABLED .and. IO_storage_task) then
-    ! use the global MPI communicator and info handle
-    call world_get_comm(comm)
-    call world_get_info_null(info)
-    call h5_initialize()
-    call h5_set_mpi_info(comm, info, myrank, NPROCTOT_VAL)
-  endif
-
   ! initialize all counters
   ! undo attenuation
   n_recv_msg_ford_undo = 0 ! number of messages received for undo attenuation of one iteration
@@ -705,7 +728,15 @@ contains
   ! undo attenuation
   if (UNDO_ATTENUATION .and. SAVE_FORWARD) then
 
-    ! create all the HDF5 files and datasets for undo attenuation
+    ! initialize HDF5 MPI context on IO storage tasks for undo snapshots
+    if (HDF5_ENABLED .and. IO_storage_task) then
+      call world_get_comm(comm)
+      call world_get_info_null(info)
+      call h5_initialize()
+      call h5_set_mpi_info(comm, info, myrank, NPROCTOT_VAL)
+    endif
+
+    ! create all the HDF5 files and datasets for undo attenuation (one per snapshot)
     do i_out = 1, NSUBSET_ITERATIONS
       call create_hdf5_files_and_datasets(i_out)
     enddo
@@ -815,6 +846,7 @@ contains
 
   if (VERBOSE .and. IO_storage_task) then
     print *, 'io_server: entering do_io_start_idle'
+    print *, '  undo: max_ford_undo_out =', max_ford_undo_out, ' n_msg_ford_undo =', n_msg_ford_undo
     print *, '  surf: it_first_surf =', it_first_surf, ' max_surf_frames =', max_surf_frames, ' n_msg_surf =', n_msg_surf
     print *, '  vol : it_first_vol  =', it_first_vol,  ' max_vol_frames  =', max_vol_frames,  ' n_msg_vol  =', n_msg_vol
   endif
@@ -835,6 +867,9 @@ contains
             call create_surface_frame_group(surf_frame_count, it_first_surf)
           endif
           call synchronize_all()
+          if (VERBOSE .and. IO_storage_task) then
+            print *, 'io_server: prepared surface frame group ', surf_frame_count, '/', max_surf_frames
+          endif
           surf_group_frame_prepared = surf_frame_count
         endif
       endif
@@ -849,6 +884,9 @@ contains
             call create_volume_frame_group(vol_frame_count, it_first_vol)
           endif
           call synchronize_all()
+          if (VERBOSE .and. IO_storage_task) then
+            print *, 'io_server: prepared volume frame group ', vol_frame_count, '/', max_vol_frames
+          endif
           vol_group_frame_prepared = vol_frame_count
         endif
       endif
@@ -923,6 +961,10 @@ contains
         ! reset the receive counter
         n_recv_msg_ford_undo = 0
 
+        if (VERBOSE .and. IO_storage_task) then
+          print *, 'io_server: completed undo iteration ', ford_undo_out_count, '/', max_ford_undo_out
+        endif
+
         ! write out the times
         call calculate_bandwidth_all_procs()
 
@@ -937,6 +979,10 @@ contains
         if (n_recv_msg_surf >= n_msg_surf) then
           surf_frame_count = surf_frame_count + 1
           n_recv_msg_surf = 0
+
+          if (VERBOSE .and. IO_storage_task) then
+            print *, 'io_server: completed surface frame ', surf_frame_count, '/', max_surf_frames
+          endif
         endif
       endif
     endif
@@ -946,6 +992,10 @@ contains
         if (n_recv_msg_vol >= n_msg_vol) then
           vol_frame_count = vol_frame_count + 1
           n_recv_msg_vol = 0
+
+          if (VERBOSE .and. IO_storage_task) then
+            print *, 'io_server: completed volume frame ', vol_frame_count, '/', max_vol_frames
+          endif
         endif
       endif
     endif
@@ -1049,6 +1099,17 @@ contains
     ! receive the number of messages
     call recv_i_inter(tmp_arr, 1, 0, io_tag_ford_undo_nmsg)
     n_msg_ford_undo = tmp_arr(1)
+
+    ! debug: log undo configuration on IO ranks
+    if (VERBOSE) then
+      print *, 'io_server: get_info_from_comp rank', myrank, 'NSUBSET_ITERATIONS =', NSUBSET_ITERATIONS
+      print *, 'io_server: get_info_from_comp rank', myrank, 'sum(offset_nglob_cm) =', sum(offset_nglob_cm)
+      print *, 'io_server: get_info_from_comp rank', myrank, 'n_msg_ford_undo =', n_msg_ford_undo
+      call flush_stdout()
+    endif
+
+    ! build ordered tag list for undo-attenuation messages
+    call build_undo_tag_list()
 
   else
     n_msg_ford_undo = 0
@@ -1217,6 +1278,108 @@ contains
 
   end subroutine pass_info_to_io
 
+!-------------------------------------------------------------------------------------------------
+!
+
+  subroutine build_undo_tag_list()
+
+#ifdef USE_HDF5
+
+  use specfem_par
+
+  implicit none
+
+  integer, parameter :: N_BASE_TAGS = 19
+  integer, dimension(N_BASE_TAGS) :: base_tags
+  integer, dimension(2)  :: rot_tags
+  integer, dimension(10) :: att_tags
+  integer, dimension(3)  :: grav_tags
+  integer :: idx
+
+  ! define base tags in the exact send order used in
+  ! save_forward_arrays_undoatt_hdf5()
+  base_tags = (/ &
+    io_tag_ford_undo_d_cm, &
+    io_tag_ford_undo_v_cm, &
+    io_tag_ford_undo_a_cm, &
+    io_tag_ford_undo_d_oc, &
+    io_tag_ford_undo_v_oc, &
+    io_tag_ford_undo_a_oc, &
+    io_tag_ford_undo_d_ic, &
+    io_tag_ford_undo_v_ic, &
+    io_tag_ford_undo_a_ic, &
+    io_tag_ford_undo_eps_xx_cm, &
+    io_tag_ford_undo_eps_yy_cm, &
+    io_tag_ford_undo_eps_xy_cm, &
+    io_tag_ford_undo_eps_xz_cm, &
+    io_tag_ford_undo_eps_yz_cm, &
+    io_tag_ford_undo_eps_xx_ic, &
+    io_tag_ford_undo_eps_yy_ic, &
+    io_tag_ford_undo_eps_xy_ic, &
+    io_tag_ford_undo_eps_xz_ic, &
+    io_tag_ford_undo_eps_yz_ic /)
+
+  rot_tags = (/ io_tag_ford_undo_A_rot, io_tag_ford_undo_B_rot /)
+
+  att_tags = (/ &
+    io_tag_ford_undo_R_xx_cm, &
+    io_tag_ford_undo_R_yy_cm, &
+    io_tag_ford_undo_R_xy_cm, &
+    io_tag_ford_undo_R_xz_cm, &
+    io_tag_ford_undo_R_yz_cm, &
+    io_tag_ford_undo_R_xx_ic, &
+    io_tag_ford_undo_R_yy_ic, &
+    io_tag_ford_undo_R_xy_ic, &
+    io_tag_ford_undo_R_xz_ic, &
+    io_tag_ford_undo_R_yz_ic /)
+
+  grav_tags = (/ io_tag_ford_undo_neq, io_tag_ford_undo_neq1, io_tag_ford_undo_pgrav1 /)
+
+  ! total number of tags equals n_msg_ford_undo provided by rank 0
+  n_undo_tags = n_msg_ford_undo
+
+  if (allocated(undo_tag_list)) deallocate(undo_tag_list)
+  if (n_undo_tags > 0) then
+    allocate(undo_tag_list(n_undo_tags))
+  else
+    return
+  endif
+
+  ! fill in order: base, optional rotation, optional attenuation, optional gravity
+  idx = 0
+
+  undo_tag_list(1:N_BASE_TAGS) = base_tags
+  idx = N_BASE_TAGS
+
+  if (ROTATION_VAL) then
+    undo_tag_list(idx+1:idx+2) = rot_tags
+    idx = idx + 2
+  endif
+
+  if (ATTENUATION_VAL) then
+    undo_tag_list(idx+1:idx+10) = att_tags
+    idx = idx + 10
+  endif
+
+  if (FULL_GRAVITY_VAL) then
+    undo_tag_list(idx+1:idx+3) = grav_tags
+    idx = idx + 3
+  endif
+
+  ! safety: idx should match n_undo_tags
+  if (idx /= n_undo_tags) then
+    print *, 'build_undo_tag_list: mismatch between constructed tag count and n_msg_ford_undo', idx, n_undo_tags
+  endif
+
+#else
+
+  ! no-op when built without HDF5 support
+
+#endif
+
+  end subroutine build_undo_tag_list
+
+!
 !-------------------------------------------------------------------------------------------------
 !
 ! MPI communications
@@ -1516,6 +1679,7 @@ contains
 #ifdef USE_HDF5
     use specfem_par
     use specfem_par_movie_hdf5
+    use manager_hdf5
 #endif
 
     implicit none
@@ -1524,83 +1688,90 @@ contains
 
 #ifdef USE_HDF5
     ! forward undo arrays
+
+    ! In multi-IO mode, undo checkpoints are written into per-IO
+    ! shard files by recv_and_write_ford_undo(). To avoid creating
+    ! an unused single shared save_frame_at*.h5 here, skip global
+    ! pre-creation when HDF5_IO_NODES > 1.
+    if (HDF5_IO_NODES > 1) then
+      return
+    endif
+
     if (UNDO_ATTENUATION .and. SAVE_FORWARD) then
 
-      ! create output files and datasets
+      ! construct output file name for this snapshot
       write(file_name, '(a,i6.6,a)') 'save_frame_at',i_snapshot,'.h5'
       file_name = trim(LOCAL_PATH)//'/'//trim(file_name)
 
-      ! get MPI parameters
-      call world_get_comm(comm)
-      call world_get_info_null(info)
+      if (VERBOSE) then
+        print *, 'io_server: create_hdf5_files_and_datasets rank', myrank, &
+                 ' snapshot', i_snapshot, ' file =', trim(file_name)
+        print *, 'io_server: create_hdf5_files_and_datasets rank', myrank, &
+                 ' sum(offset_nglob_cm) =', sum(offset_nglob_cm)
+        call flush_stdout()
+      endif
 
-      ! initialize HDF5
-      call h5_initialize() ! called in initialize_mesher()
-      ! set MPI
-      call h5_set_mpi_info(comm, info, myrank, NPROCTOT_VAL)
+      ! all IO ranks collectively create the file with the parallel driver
+      ! (MPI communicator and info are already configured via h5_set_mpi_info)
+      call h5_create_file_p_collect(file_name)
 
-      ! create file and datasets by myrank==0
-      if (myrank == 0) then
-        call h5_create_file(file_name)
+      ! create datasets (collective metadata operations across IO ranks)
+      call h5_create_dataset_gen('displ_crust_mantle', (/NDIM, sum(offset_nglob_cm)/), 2, CUSTOM_REAL)
+      call h5_create_dataset_gen('veloc_crust_mantle', (/NDIM, sum(offset_nglob_cm)/), 2, CUSTOM_REAL)
+      call h5_create_dataset_gen('accel_crust_mantle', (/NDIM, sum(offset_nglob_cm)/), 2, CUSTOM_REAL)
+      call h5_create_dataset_gen('displ_outer_core', (/sum(offset_nglob_oc)/), 1, CUSTOM_REAL)
+      call h5_create_dataset_gen('veloc_outer_core', (/sum(offset_nglob_oc)/), 1, CUSTOM_REAL)
+      call h5_create_dataset_gen('accel_outer_core', (/sum(offset_nglob_oc)/), 1, CUSTOM_REAL)
+      call h5_create_dataset_gen('displ_inner_core', (/NDIM, sum(offset_nglob_ic)/), 2, CUSTOM_REAL)
+      call h5_create_dataset_gen('veloc_inner_core', (/NDIM, sum(offset_nglob_ic)/), 2, CUSTOM_REAL)
+      call h5_create_dataset_gen('accel_inner_core', (/NDIM, sum(offset_nglob_ic)/), 2, CUSTOM_REAL)
+      call h5_create_dataset_gen('epsilondev_xx_crust_mantle', &
+                                 (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_cm_soa)/), 4, CUSTOM_REAL)
+      call h5_create_dataset_gen('epsilondev_yy_crust_mantle', &
+                                 (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_cm_soa)/), 4, CUSTOM_REAL)
+      call h5_create_dataset_gen('epsilondev_xy_crust_mantle', &
+                                 (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_cm_soa)/), 4, CUSTOM_REAL)
+      call h5_create_dataset_gen('epsilondev_xz_crust_mantle', &
+                                 (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_cm_soa)/), 4, CUSTOM_REAL)
+      call h5_create_dataset_gen('epsilondev_yz_crust_mantle', &
+                                 (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_cm_soa)/), 4, CUSTOM_REAL)
+      call h5_create_dataset_gen('epsilondev_xx_inner_core', (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_ic_soa)/), 4, CUSTOM_REAL)
+      call h5_create_dataset_gen('epsilondev_yy_inner_core', (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_ic_soa)/), 4, CUSTOM_REAL)
+      call h5_create_dataset_gen('epsilondev_xy_inner_core', (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_ic_soa)/), 4, CUSTOM_REAL)
+      call h5_create_dataset_gen('epsilondev_xz_inner_core', (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_ic_soa)/), 4, CUSTOM_REAL)
+      call h5_create_dataset_gen('epsilondev_yz_inner_core', (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_ic_soa)/), 4, CUSTOM_REAL)
 
-        ! create datasets
-        call h5_create_dataset_gen('displ_crust_mantle', (/NDIM, sum(offset_nglob_cm)/), 2, CUSTOM_REAL)
-        call h5_create_dataset_gen('veloc_crust_mantle', (/NDIM, sum(offset_nglob_cm)/), 2, CUSTOM_REAL)
-        call h5_create_dataset_gen('accel_crust_mantle', (/NDIM, sum(offset_nglob_cm)/), 2, CUSTOM_REAL)
-        call h5_create_dataset_gen('displ_outer_core', (/sum(offset_nglob_oc)/), 1, CUSTOM_REAL)
-        call h5_create_dataset_gen('veloc_outer_core', (/sum(offset_nglob_oc)/), 1, CUSTOM_REAL)
-        call h5_create_dataset_gen('accel_outer_core', (/sum(offset_nglob_oc)/), 1, CUSTOM_REAL)
-        call h5_create_dataset_gen('displ_inner_core', (/NDIM, sum(offset_nglob_ic)/), 2, CUSTOM_REAL)
-        call h5_create_dataset_gen('veloc_inner_core', (/NDIM, sum(offset_nglob_ic)/), 2, CUSTOM_REAL)
-        call h5_create_dataset_gen('accel_inner_core', (/NDIM, sum(offset_nglob_ic)/), 2, CUSTOM_REAL)
-        call h5_create_dataset_gen('epsilondev_xx_crust_mantle', &
-                                   (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_cm_soa)/), 4, CUSTOM_REAL)
-        call h5_create_dataset_gen('epsilondev_yy_crust_mantle', &
-                                   (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_cm_soa)/), 4, CUSTOM_REAL)
-        call h5_create_dataset_gen('epsilondev_xy_crust_mantle', &
-                                   (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_cm_soa)/), 4, CUSTOM_REAL)
-        call h5_create_dataset_gen('epsilondev_xz_crust_mantle', &
-                                   (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_cm_soa)/), 4, CUSTOM_REAL)
-        call h5_create_dataset_gen('epsilondev_yz_crust_mantle', &
-                                   (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_cm_soa)/), 4, CUSTOM_REAL)
-        call h5_create_dataset_gen('epsilondev_xx_inner_core', (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_ic_soa)/), 4, CUSTOM_REAL)
-        call h5_create_dataset_gen('epsilondev_yy_inner_core', (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_ic_soa)/), 4, CUSTOM_REAL)
-        call h5_create_dataset_gen('epsilondev_xy_inner_core', (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_ic_soa)/), 4, CUSTOM_REAL)
-        call h5_create_dataset_gen('epsilondev_xz_inner_core', (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_ic_soa)/), 4, CUSTOM_REAL)
-        call h5_create_dataset_gen('epsilondev_yz_inner_core', (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_ic_soa)/), 4, CUSTOM_REAL)
+      if (ROTATION_VAL) then
+        call h5_create_dataset_gen('A_array_rotation', (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_oc_rot)/), 4, CUSTOM_REAL)
+        call h5_create_dataset_gen('B_array_rotation', (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_oc_rot)/), 4, CUSTOM_REAL)
+      endif
 
-        if (ROTATION_VAL) then
-          call h5_create_dataset_gen('A_array_rotation', (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_oc_rot)/), 4, CUSTOM_REAL)
-          call h5_create_dataset_gen('B_array_rotation', (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_oc_rot)/), 4, CUSTOM_REAL)
-        endif
+      if (ATTENUATION_VAL) then
+        call h5_create_dataset_gen('R_xx_crust_mantle', (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_cm_att)/), 5, CUSTOM_REAL)
+        call h5_create_dataset_gen('R_yy_crust_mantle', (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_cm_att)/), 5, CUSTOM_REAL)
+        call h5_create_dataset_gen('R_xy_crust_mantle', (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_cm_att)/), 5, CUSTOM_REAL)
+        call h5_create_dataset_gen('R_xz_crust_mantle', (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_cm_att)/), 5, CUSTOM_REAL)
+        call h5_create_dataset_gen('R_yz_crust_mantle', (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_cm_att)/), 5, CUSTOM_REAL)
 
-        if (ATTENUATION_VAL) then
-          call h5_create_dataset_gen('R_xx_crust_mantle', (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_cm_att)/), 5, CUSTOM_REAL)
-          call h5_create_dataset_gen('R_yy_crust_mantle', (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_cm_att)/), 5, CUSTOM_REAL)
-          call h5_create_dataset_gen('R_xy_crust_mantle', (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_cm_att)/), 5, CUSTOM_REAL)
-          call h5_create_dataset_gen('R_xz_crust_mantle', (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_cm_att)/), 5, CUSTOM_REAL)
-          call h5_create_dataset_gen('R_yz_crust_mantle', (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_cm_att)/), 5, CUSTOM_REAL)
+        call h5_create_dataset_gen('R_xx_inner_core', (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_ic_att)/), 5, CUSTOM_REAL)
+        call h5_create_dataset_gen('R_yy_inner_core', (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_ic_att)/), 5, CUSTOM_REAL)
+        call h5_create_dataset_gen('R_xy_inner_core', (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_ic_att)/), 5, CUSTOM_REAL)
+        call h5_create_dataset_gen('R_xz_inner_core', (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_ic_att)/), 5, CUSTOM_REAL)
+        call h5_create_dataset_gen('R_yz_inner_core', (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_ic_att)/), 5, CUSTOM_REAL)
+      endif ! ATTENUATION_VAL
 
-          call h5_create_dataset_gen('R_xx_inner_core', (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_ic_att)/), 5, CUSTOM_REAL)
-          call h5_create_dataset_gen('R_yy_inner_core', (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_ic_att)/), 5, CUSTOM_REAL)
-          call h5_create_dataset_gen('R_xy_inner_core', (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_ic_att)/), 5, CUSTOM_REAL)
-          call h5_create_dataset_gen('R_xz_inner_core', (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_ic_att)/), 5, CUSTOM_REAL)
-          call h5_create_dataset_gen('R_yz_inner_core', (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_ic_att)/), 5, CUSTOM_REAL)
-        endif ! ATTENUATION_VAL
+      if (FULL_GRAVITY_VAL) then
+        call h5_create_dataset_gen('neq', (/NPROCTOT_VAL/), 1, 1)
+        call h5_create_dataset_gen('neq1', (/NPROCTOT_VAL/), 1, 1)
+        call h5_create_dataset_gen('pgrav1', (/sum(offset_pgrav1)/), 1, CUSTOM_REAL)
+      endif ! FULL_GRAVITY_VAL
 
-        if (FULL_GRAVITY_VAL) then
-          call h5_create_dataset_gen('neq', (/NPROCTOT_VAL/), 1, 1)
-          call h5_create_dataset_gen('neq1', (/NPROCTOT_VAL/), 1, 1)
-          call h5_create_dataset_gen('pgrav1', (/sum(offset_pgrav1)/), 1, CUSTOM_REAL)
-        endif ! FULL_GRAVITY_VAL
-
-        ! close file
-        call h5_close_file()
-      endif ! myrank == 0
+      ! close file collectively
+      call h5_close_file_p()
 
     endif ! UNDO_ATTENUATION .and. SAVE_FORWARD
 
-    ! wait for rank 0 to finish
+    ! global barrier among IO tasks before proceeding to next snapshot
     call synchronize_all()
 
 #else
@@ -1663,8 +1834,9 @@ contains
     integer, intent(in) :: it_first_surf
 
     integer :: it_val
+    integer :: i_io
 
-    ! safety: this routine must only be called on rank 0
+    ! safety: this routine must only be called on rank 0 of the world
     if (myrank > 0) then
       print *, 'Error: create_surface_frame_group called from rank ', myrank
       stop 'create_surface_frame_group must be called only on rank 0'
@@ -1673,19 +1845,28 @@ contains
     ! compute actual time-step index for this frame
     it_val = it_first_surf + i_frame * NTSTEP_BETWEEN_FRAMES
 
-    ! construct file and group names
-    file_name = trim(OUTPUT_FILES)//"/movie_surface.h5"
+    ! construct group name for this time step
     group_name = "it_"//trim(i2c(it_val))
 
-    ! open file in serial mode and create group/datasets
-    call h5_open_file(file_name)
-    call h5_create_group(group_name)
-    call h5_open_group(group_name)
-    call h5_create_dataset_gen_in_group("ux", (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
-    call h5_create_dataset_gen_in_group("uy", (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
-    call h5_create_dataset_gen_in_group("uz", (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
-    call h5_close_group()
-    call h5_close_file()
+    if (HDF5_IO_NODES > 1) then
+      ! multi-IO-server mode: do not touch shard files here. Each IO
+      ! server will lazily create/open its own shard file and frame
+      ! group when it first receives data for this frame. This avoids
+      ! any cross-rank contention or file locking issues.
+      return
+    else
+      ! single-file mode: original behaviour creating the frame in
+      ! OUTPUT_FILES/movie_surface.h5
+      file_name = trim(OUTPUT_FILES)//"/movie_surface.h5"
+      call h5_create_or_open_file(file_name)
+      call h5_create_group(group_name)
+      call h5_open_group(group_name)
+      call h5_create_dataset_gen_in_group("ux", (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
+      call h5_create_dataset_gen_in_group("uy", (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
+      call h5_create_dataset_gen_in_group("uz", (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
+      call h5_close_group()
+      call h5_close_file()
+    endif
 
 #endif
 
@@ -1717,6 +1898,13 @@ contains
     if (myrank > 0) then
       print *, 'Error: create_volume_frame_group called from rank ', myrank
       stop 'create_volume_frame_group must be called only on rank 0'
+    endif
+
+    ! in multi-IO mode, we let each IO rank lazily create its own
+    ! shard file and frame group when it first receives data for
+    ! this frame. Avoids cross-rank contention on a single file.
+    if (HDF5_IO_NODES > 1) then
+      return
     endif
 
     ! compute actual time-step index for this frame
@@ -1844,16 +2032,35 @@ contains
     integer :: neq, neq1
 
     integer :: data_size ! size of one data element in bytes
+    logical :: use_collective
+    logical :: dset_exists
 
     ! default datasize is for CUSTOM_REAL
     data_size = CUSTOM_REAL ! 8 for double precision, 4 for single precision
 
+    ! use collective HDF5 only when there is a single IO node
+    ! multi-IO with asynchronous message arrival breaks collective ordering
+    use_collective = H5_COL .and. (HDF5_IO_NODES <= 1)
+
     ! get message size
     call world_get_size_msg(status, msg_size)
 
-    ! file name to write (save_frame_atXXXXXX.h5) XXXXXX is the snapshot number + 1
+    ! file name to write
+    !  - single-IO mode:  save_frame_atXXXXXX.h5
+    !  - multi-IO mode:   save_frame_atXXXXXX.io<my_io_id>.h5
     write(file_name, '(a,i6.6,a)') 'save_frame_at',i_snapshot+1,'.h5'
-    file_name = trim(LOCAL_PATH)//'/'//trim(file_name)
+    if (HDF5_IO_NODES > 1) then
+      file_name = trim(LOCAL_PATH)//'/save_frame_at'//trim(i2c(i_snapshot+1))//'.io'//trim(i2c(my_io_id))//'.h5'
+    else
+      file_name = trim(LOCAL_PATH)//'/'//trim(file_name)
+    endif
+
+    if (VERBOSE) then
+      print *, 'io_server: recv_and_write_ford_undo rank', myrank, &
+               ' snapshot', i_snapshot+1, ' tag', tag, ' from src', tag_src, &
+               ' open file =', trim(file_name)
+      call flush_stdout()
+    endif
 
     ! open file
     !! get MPI parameters
@@ -1865,12 +2072,18 @@ contains
     !! set MPI
     !call h5_set_mpi_info(comm, info, myrank, NPROCTOT_VAL)
 
-    if (H5_COL) then
-      ! open file
-      call h5_open_file_p_collect(file_name)
+    if (HDF5_IO_NODES > 1) then
+      ! multi-IO mode: each IO rank independently opens or creates
+      ! its own shard file using serial HDF5
+      call h5_create_or_open_file(file_name)
     else
-      ! open file
-      call h5_open_file_p(file_name)
+      if (use_collective) then
+        ! open file using parallel HDF5 collectively
+        call h5_open_file_p_collect(file_name)
+      else
+        ! open file using parallel HDF5 without collectives
+        call h5_open_file_p(file_name)
+      endif
     endif
 
     ! receive the data
@@ -1882,8 +2095,14 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_2d_glob(:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('displ_crust_mantle', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('displ_crust_mantle', (/NDIM, sum(offset_nglob_cm)/), 2, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
-      call h5_write_dataset_collect_hyperslab('displ_crust_mantle', dump_ford_undo_2d_glob(:,1:data_len), (/0, ista/), H5_COL)
+      call h5_write_dataset_collect_hyperslab('displ_crust_mantle', dump_ford_undo_2d_glob(:,1:data_len), (/0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_v_cm) then
@@ -1894,8 +2113,20 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_2d_glob(:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (VERBOSE) then
+        print *, 'io_server: writing veloc_crust_mantle on rank', myrank, &
+                 ' snapshot', i_snapshot+1, ' ista =', ista, ' data_len =', data_len, &
+                 ' use_collective =', use_collective
+        call flush_stdout()
+      endif
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('veloc_crust_mantle', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('veloc_crust_mantle', (/NDIM, sum(offset_nglob_cm)/), 2, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
-      call h5_write_dataset_collect_hyperslab('veloc_crust_mantle', dump_ford_undo_2d_glob(:,1:data_len), (/0, ista/), H5_COL)
+      call h5_write_dataset_collect_hyperslab('veloc_crust_mantle', dump_ford_undo_2d_glob(:,1:data_len), (/0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_a_cm) then
@@ -1906,8 +2137,14 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_2d_glob(:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('accel_crust_mantle', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('accel_crust_mantle', (/NDIM, sum(offset_nglob_cm)/), 2, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
-      call h5_write_dataset_collect_hyperslab('accel_crust_mantle', dump_ford_undo_2d_glob(:,1:data_len), (/0, ista/), H5_COL)
+      call h5_write_dataset_collect_hyperslab('accel_crust_mantle', dump_ford_undo_2d_glob(:,1:data_len), (/0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_d_oc) then
@@ -1918,8 +2155,14 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_1d_glob(1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('displ_outer_core', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('displ_outer_core', (/sum(offset_nglob_oc)/), 1, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
-      call h5_write_dataset_collect_hyperslab('displ_outer_core', dump_ford_undo_1d_glob(1:data_len), (/ista/), H5_COL)
+      call h5_write_dataset_collect_hyperslab('displ_outer_core', dump_ford_undo_1d_glob(1:data_len), (/ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_v_oc) then
@@ -1930,8 +2173,14 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_1d_glob(1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('veloc_outer_core', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('veloc_outer_core', (/sum(offset_nglob_oc)/), 1, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
-      call h5_write_dataset_collect_hyperslab('veloc_outer_core', dump_ford_undo_1d_glob(1:data_len), (/ista/), H5_COL)
+      call h5_write_dataset_collect_hyperslab('veloc_outer_core', dump_ford_undo_1d_glob(1:data_len), (/ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_a_oc) then
@@ -1942,8 +2191,14 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_1d_glob(1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('accel_outer_core', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('accel_outer_core', (/sum(offset_nglob_oc)/), 1, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
-      call h5_write_dataset_collect_hyperslab('accel_outer_core', dump_ford_undo_1d_glob(1:data_len), (/ista/), H5_COL)
+      call h5_write_dataset_collect_hyperslab('accel_outer_core', dump_ford_undo_1d_glob(1:data_len), (/ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_d_ic) then
@@ -1954,8 +2209,14 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_2d_glob(:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('displ_inner_core', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('displ_inner_core', (/NDIM, sum(offset_nglob_ic)/), 2, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
-      call h5_write_dataset_collect_hyperslab('displ_inner_core', dump_ford_undo_2d_glob(:,1:data_len), (/0, ista/), H5_COL)
+      call h5_write_dataset_collect_hyperslab('displ_inner_core', dump_ford_undo_2d_glob(:,1:data_len), (/0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_v_ic) then
@@ -1966,8 +2227,14 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_2d_glob(:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('veloc_inner_core', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('veloc_inner_core', (/NDIM, sum(offset_nglob_ic)/), 2, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
-      call h5_write_dataset_collect_hyperslab('veloc_inner_core', dump_ford_undo_2d_glob(:,1:data_len), (/0, ista/), H5_COL)
+      call h5_write_dataset_collect_hyperslab('veloc_inner_core', dump_ford_undo_2d_glob(:,1:data_len), (/0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_a_ic) then
@@ -1978,8 +2245,14 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_2d_glob(:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('accel_inner_core', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('accel_inner_core', (/NDIM, sum(offset_nglob_ic)/), 2, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
-      call h5_write_dataset_collect_hyperslab('accel_inner_core', dump_ford_undo_2d_glob(:,1:data_len), (/0, ista/), H5_COL)
+      call h5_write_dataset_collect_hyperslab('accel_inner_core', dump_ford_undo_2d_glob(:,1:data_len), (/0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_eps_xx_cm) then
@@ -1990,9 +2263,16 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_4d(:,:,:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('epsilondev_xx_crust_mantle', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('epsilondev_xx_crust_mantle', &
+                                     (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_cm_soa)/), 4, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
       call h5_write_dataset_collect_hyperslab('epsilondev_xx_crust_mantle', dump_ford_undo_4d(:,:,:,1:data_len), &
-                                                                                              (/0, 0, 0, ista/), H5_COL)
+                                     (/0, 0, 0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_eps_yy_cm) then
@@ -2003,9 +2283,16 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_4d(:,:,:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('epsilondev_yy_crust_mantle', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('epsilondev_yy_crust_mantle', &
+                                     (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_cm_soa)/), 4, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
       call h5_write_dataset_collect_hyperslab('epsilondev_yy_crust_mantle', dump_ford_undo_4d(:,:,:,1:data_len), &
-                                                                                              (/0, 0, 0, ista/), H5_COL)
+                                     (/0, 0, 0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_eps_xy_cm) then
@@ -2016,9 +2303,16 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_4d(:,:,:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('epsilondev_xy_crust_mantle', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('epsilondev_xy_crust_mantle', &
+                                     (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_cm_soa)/), 4, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
       call h5_write_dataset_collect_hyperslab('epsilondev_xy_crust_mantle', dump_ford_undo_4d(:,:,:,1:data_len), &
-                                                                                              (/0, 0, 0, ista/), H5_COL)
+                                     (/0, 0, 0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_eps_xz_cm) then
@@ -2029,9 +2323,16 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_4d(:,:,:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('epsilondev_xz_crust_mantle', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('epsilondev_xz_crust_mantle', &
+                                     (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_cm_soa)/), 4, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
       call h5_write_dataset_collect_hyperslab('epsilondev_xz_crust_mantle', dump_ford_undo_4d(:,:,:,1:data_len), &
-                                                                                              (/0, 0, 0, ista/), H5_COL)
+                                     (/0, 0, 0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_eps_yz_cm) then
@@ -2042,9 +2343,16 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_4d(:,:,:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('epsilondev_yz_crust_mantle', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('epsilondev_yz_crust_mantle', &
+                                     (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_cm_soa)/), 4, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
       call h5_write_dataset_collect_hyperslab('epsilondev_yz_crust_mantle', dump_ford_undo_4d(:,:,:,1:data_len), &
-                                                                                              (/0, 0, 0, ista/), H5_COL)
+                                     (/0, 0, 0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_eps_xx_ic) then
@@ -2055,9 +2363,16 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_4d(:,:,:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('epsilondev_xx_inner_core', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('epsilondev_xx_inner_core', &
+                                     (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_ic_soa)/), 4, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
       call h5_write_dataset_collect_hyperslab('epsilondev_xx_inner_core', dump_ford_undo_4d(:,:,:,1:data_len), &
-                                                                                            (/0, 0, 0, ista/), H5_COL)
+                                   (/0, 0, 0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_eps_yy_ic) then
@@ -2068,9 +2383,16 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_4d(:,:,:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('epsilondev_yy_inner_core', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('epsilondev_yy_inner_core', &
+                                     (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_ic_soa)/), 4, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
       call h5_write_dataset_collect_hyperslab('epsilondev_yy_inner_core', dump_ford_undo_4d(:,:,:,1:data_len), &
-                                                                                            (/0, 0, 0, ista/), H5_COL)
+                                   (/0, 0, 0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_eps_xy_ic) then
@@ -2081,9 +2403,16 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_4d(:,:,:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('epsilondev_xy_inner_core', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('epsilondev_xy_inner_core', &
+                                     (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_ic_soa)/), 4, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
       call h5_write_dataset_collect_hyperslab('epsilondev_xy_inner_core', dump_ford_undo_4d(:,:,:,1:data_len), &
-                                                                                            (/0, 0, 0, ista/), H5_COL)
+                                   (/0, 0, 0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_eps_xz_ic) then
@@ -2094,9 +2423,16 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_4d(:,:,:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('epsilondev_xz_inner_core', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('epsilondev_xz_inner_core', &
+                                     (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_ic_soa)/), 4, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
       call h5_write_dataset_collect_hyperslab('epsilondev_xz_inner_core', dump_ford_undo_4d(:,:,:,1:data_len), &
-                                                                                            (/0, 0, 0, ista/), H5_COL)
+                                   (/0, 0, 0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_eps_yz_ic) then
@@ -2107,9 +2443,16 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_4d(:,:,:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('epsilondev_yz_inner_core', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('epsilondev_yz_inner_core', &
+                                     (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_ic_soa)/), 4, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
       call h5_write_dataset_collect_hyperslab('epsilondev_yz_inner_core', dump_ford_undo_4d(:,:,:,1:data_len), &
-                                                                                            (/0, 0, 0, ista/), H5_COL)
+                                   (/0, 0, 0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_A_rot) then
@@ -2120,9 +2463,16 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_4d(:,:,:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('A_array_rotation', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('A_array_rotation', &
+                                     (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_oc_rot)/), 4, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
       call h5_write_dataset_collect_hyperslab('A_array_rotation', dump_ford_undo_4d(:,:,:,1:data_len), &
-                                                                                    (/0, 0, 0, ista/), H5_COL)
+                                (/0, 0, 0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_B_rot) then
@@ -2133,9 +2483,16 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_4d(:,:,:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('B_array_rotation', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('B_array_rotation', &
+                                     (/NGLLX, NGLLY, NGLLZ, sum(offset_nspec_oc_rot)/), 4, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
       call h5_write_dataset_collect_hyperslab('B_array_rotation', dump_ford_undo_4d(:,:,:,1:data_len), &
-                                                                                    (/0, 0, 0, ista/), H5_COL)
+                                (/0, 0, 0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_R_xx_cm) then
@@ -2146,9 +2503,16 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_5d(:,:,:,:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('R_xx_crust_mantle', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('R_xx_crust_mantle', &
+                                     (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_cm_att)/), 5, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
       call h5_write_dataset_collect_hyperslab('R_xx_crust_mantle', dump_ford_undo_5d(:,:,:,:,1:data_len), &
-                                                                                    (/0, 0, 0, 0, ista/), H5_COL)
+                                (/0, 0, 0, 0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_R_yy_cm) then
@@ -2159,9 +2523,16 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_5d(:,:,:,:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('R_yy_crust_mantle', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('R_yy_crust_mantle', &
+                                     (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_cm_att)/), 5, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
       call h5_write_dataset_collect_hyperslab('R_yy_crust_mantle', dump_ford_undo_5d(:,:,:,:,1:data_len), &
-                                                                                    (/0, 0, 0, 0, ista/), H5_COL)
+                                (/0, 0, 0, 0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_R_xy_cm) then
@@ -2172,9 +2543,16 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_5d(:,:,:,:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('R_xy_crust_mantle', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('R_xy_crust_mantle', &
+                                     (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_cm_att)/), 5, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
       call h5_write_dataset_collect_hyperslab('R_xy_crust_mantle', dump_ford_undo_5d(:,:,:,:,1:data_len), &
-                                                                                    (/0, 0, 0, 0, ista/), H5_COL)
+                                (/0, 0, 0, 0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_R_xz_cm) then
@@ -2185,9 +2563,16 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_5d(:,:,:,:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('R_xz_crust_mantle', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('R_xz_crust_mantle', &
+                                     (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_cm_att)/), 5, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
       call h5_write_dataset_collect_hyperslab('R_xz_crust_mantle', dump_ford_undo_5d(:,:,:,:,1:data_len), &
-                                                                                    (/0, 0, 0, 0, ista/), H5_COL)
+                                (/0, 0, 0, 0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_R_yz_cm) then
@@ -2198,9 +2583,16 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_5d(:,:,:,:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('R_yz_crust_mantle', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('R_yz_crust_mantle', &
+                                     (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_cm_att)/), 5, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
       call h5_write_dataset_collect_hyperslab('R_yz_crust_mantle', dump_ford_undo_5d(:,:,:,:,1:data_len), &
-                                                                                    (/0, 0, 0, 0, ista/), H5_COL)
+                                (/0, 0, 0, 0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_R_xx_ic) then
@@ -2211,9 +2603,16 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_5d(:,:,:,:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('R_xx_inner_core', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('R_xx_inner_core', &
+                                     (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_ic_att)/), 5, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
       call h5_write_dataset_collect_hyperslab('R_xx_inner_core', dump_ford_undo_5d(:,:,:,:,1:data_len), &
-                                                                                  (/0, 0, 0, 0, ista/), H5_COL)
+                                  (/0, 0, 0, 0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_R_yy_ic) then
@@ -2224,9 +2623,16 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_5d(:,:,:,:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('R_yy_inner_core', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('R_yy_inner_core', &
+                                     (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_ic_att)/), 5, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
       call h5_write_dataset_collect_hyperslab('R_yy_inner_core', dump_ford_undo_5d(:,:,:,:,1:data_len), &
-                                                                                  (/0, 0, 0, 0, ista/), H5_COL)
+                                  (/0, 0, 0, 0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_R_xy_ic) then
@@ -2237,9 +2643,16 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_5d(:,:,:,:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('R_xy_inner_core', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('R_xy_inner_core', &
+                                     (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_ic_att)/), 5, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
       call h5_write_dataset_collect_hyperslab('R_xy_inner_core', dump_ford_undo_5d(:,:,:,:,1:data_len), &
-                                                                                  (/0, 0, 0, 0, ista/), H5_COL)
+                                  (/0, 0, 0, 0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_R_xz_ic) then
@@ -2250,9 +2663,16 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_5d(:,:,:,:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('R_xz_inner_core', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('R_xz_inner_core', &
+                                     (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_ic_att)/), 5, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
       call h5_write_dataset_collect_hyperslab('R_xz_inner_core', dump_ford_undo_5d(:,:,:,:,1:data_len), &
-                                                                                  (/0, 0, 0, 0, ista/), H5_COL)
+                                  (/0, 0, 0, 0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_R_yz_ic) then
@@ -2263,9 +2683,16 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_5d(:,:,:,:,1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('R_yz_inner_core', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('R_yz_inner_core', &
+                                     (/NGLLX, NGLLY, NGLLZ, N_SLS, sum(offset_nspec_ic_att)/), 5, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
       call h5_write_dataset_collect_hyperslab('R_yz_inner_core', dump_ford_undo_5d(:,:,:,:,1:data_len), &
-                                                                                  (/0, 0, 0, 0, ista/), H5_COL)
+                                  (/0, 0, 0, 0, ista/), use_collective)
       call stop_timer()
 
     else if (tag == io_tag_ford_undo_neq) then
@@ -2273,8 +2700,14 @@ contains
       ! receive
       call irecv_i_inter((/neq/), 1, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('neq', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('neq', (/NPROCTOT_VAL/), 1, 1)
+        endif
+      endif
       call start_timer()
-      call h5_write_dataset_collect_hyperslab('neq', (/neq/), (/tag_src/), H5_COL)
+      call h5_write_dataset_collect_hyperslab('neq', (/neq/), (/tag_src/), use_collective)
       call stop_timer()
 
       ! data size if for integer
@@ -2285,8 +2718,14 @@ contains
       ! receive
       call irecv_i_inter((/neq1/), 1, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('neq1', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('neq1', (/NPROCTOT_VAL/), 1, 1)
+        endif
+      endif
       call start_timer()
-      call h5_write_dataset_collect_hyperslab('neq1', (/neq1/), (/tag_src/), H5_COL)
+      call h5_write_dataset_collect_hyperslab('neq1', (/neq1/), (/tag_src/), use_collective)
       call stop_timer()
 
       ! data size if for integer
@@ -2300,8 +2739,14 @@ contains
       ! receive
       call irecvv_cr_inter(dump_ford_undo_1d_glob(1:data_len), msg_size, tag_src, tag, req_dummy)
       ! write
+      if (HDF5_IO_NODES > 1) then
+        call h5_check_dataset_exists('pgrav1', dset_exists)
+        if (.not. dset_exists) then
+          call h5_create_dataset_gen('pgrav1', (/sum(offset_pgrav1)/), 1, CUSTOM_REAL)
+        endif
+      endif
       call start_timer()
-      call h5_write_dataset_collect_hyperslab('pgrav1', dump_ford_undo_1d_glob(1:data_len), (/ista/), H5_COL)
+      call h5_write_dataset_collect_hyperslab('pgrav1', dump_ford_undo_1d_glob(1:data_len), (/ista/), use_collective)
       call stop_timer()
     else
       ! unknown tag
@@ -2315,8 +2760,11 @@ contains
     call set_bytes_written_from_array(data_size*8, msg_size) ! converting to bits from bytes
 
     ! close file
-    call h5_close_file_p()
-    !call h5_close_file()
+    if (HDF5_IO_NODES > 1) then
+      call h5_close_file()
+    else
+      call h5_close_file_p()
+    endif
 
   end subroutine recv_and_write_ford_undo
 
@@ -2349,6 +2797,7 @@ contains
     integer :: data_size
     logical :: dset_exists
     character(len=MAX_STRING_LEN) :: dset_full_name
+    logical :: use_collective
 
     ! get message size
     call world_get_size_msg(status, msg_size)
@@ -2356,22 +2805,35 @@ contains
     ! size of one data element in bytes
     data_size = CUSTOM_REAL
 
+    ! use collective HDF5 only when there is a single IO node writing
+    use_collective = H5_COL .and. (HDF5_IO_NODES <= 1)
+
     ! compute actual time-step index for this frame
     it_val = it_first_surf + i_frame * NTSTEP_BETWEEN_FRAMES
 
     ! construct file and group names
-    file_name = trim(OUTPUT_FILES)//"/movie_surface.h5"
+    if (HDF5_IO_NODES > 1) then
+      ! multi-IO-server mode: each IO server writes to its own shard file
+      file_name = trim(OUTPUT_FILES)//"/movie_surface.io"//trim(i2c(my_io_id))//".h5"
+    else
+      ! single IO server or no IO sharding: original movie_surface.h5 file
+      file_name = trim(OUTPUT_FILES)//"/movie_surface.h5"
+    endif
     group_name = "it_"//trim(i2c(it_val))
 
-    ! open file
-    if (H5_COL) then
-      call h5_open_file_p_collect(file_name)
-    else
-      call h5_open_file_p(file_name)
+    if (VERBOSE) then
+      print *, 'io_server: recv_and_write_surface_movie rank', myrank, &
+               ' frame', i_frame+1, ' it =', it_val, ' tag', tag, ' src', tag_src, &
+               ' file =', trim(file_name), ' group =', trim(group_name)
+      call flush_stdout()
     endif
 
-    ! ensure group and datasets exist (defensive in case pre-creation was skipped)
-    if (myrank == 0) then
+    ! open file
+    if (HDF5_IO_NODES > 1) then
+      ! each IO rank independently opens or creates its own shard file
+      call h5_create_or_open_file(file_name)
+
+      ! ensure group and datasets exist locally in this shard file
       call h5_open_or_create_group(group_name)
 
       dset_full_name = trim(group_name)//'/ux'
@@ -2392,13 +2854,22 @@ contains
         call h5_create_dataset_gen_in_group('uz', (/npoints_surf_mov_all_proc/), 1, CUSTOM_REAL)
       endif
 
-      call h5_close_group()
+      ! stay in this group for writing; no cross-rank collectives here
+    else
+      if (use_collective) then
+        call h5_open_file_p_collect(file_name)
+      else
+        call h5_open_file_p(file_name)
+      endif
+
+      ! group and datasets were already created collectively
+      call h5_open_group(group_name)
     endif
 
-    call synchronize_all()
-
-    ! open group collectively
-    call h5_open_group(group_name)
+    if (VERBOSE) then
+      print *, 'io_server: opened surface group on rank', myrank, ' group =', trim(group_name)
+      call flush_stdout()
+    endif
 
     ! receive and write according to tag
     ista = sum(offset_poin(0:tag_src-1))
@@ -2406,18 +2877,33 @@ contains
 
     if (tag == io_tag_surf_ux) then
       call irecvv_cr_inter(dump_surf_ux(1:data_len), msg_size, tag_src, tag, req_dummy)
+      if (VERBOSE) then
+        print *, 'io_server: writing surf ux on rank', myrank, ' frame', i_frame+1, &
+                 ' ista =', ista, ' len =', data_len, ' use_collective =', use_collective
+        call flush_stdout()
+      endif
       call start_timer()
-      call h5_write_dataset_collect_hyperslab_in_group("ux", dump_surf_ux(1:data_len), (/ista/), H5_COL)
+      call h5_write_dataset_collect_hyperslab_in_group("ux", dump_surf_ux(1:data_len), (/ista/), use_collective)
       call stop_timer()
     else if (tag == io_tag_surf_uy) then
       call irecvv_cr_inter(dump_surf_uy(1:data_len), msg_size, tag_src, tag, req_dummy)
+      if (VERBOSE) then
+        print *, 'io_server: writing surf uy on rank', myrank, ' frame', i_frame+1, &
+                 ' ista =', ista, ' len =', data_len, ' use_collective =', use_collective
+        call flush_stdout()
+      endif
       call start_timer()
-      call h5_write_dataset_collect_hyperslab_in_group("uy", dump_surf_uy(1:data_len), (/ista/), H5_COL)
+      call h5_write_dataset_collect_hyperslab_in_group("uy", dump_surf_uy(1:data_len), (/ista/), use_collective)
       call stop_timer()
     else if (tag == io_tag_surf_uz) then
       call irecvv_cr_inter(dump_surf_uz(1:data_len), msg_size, tag_src, tag, req_dummy)
+      if (VERBOSE) then
+        print *, 'io_server: writing surf uz on rank', myrank, ' frame', i_frame+1, &
+                 ' ista =', ista, ' len =', data_len, ' use_collective =', use_collective
+        call flush_stdout()
+      endif
       call start_timer()
-      call h5_write_dataset_collect_hyperslab_in_group("uz", dump_surf_uz(1:data_len), (/ista/), H5_COL)
+      call h5_write_dataset_collect_hyperslab_in_group("uz", dump_surf_uz(1:data_len), (/ista/), use_collective)
       call stop_timer()
     else
       print *, 'Error: unknown surface movie tag in recv_and_write_surface_movie'
@@ -2428,8 +2914,13 @@ contains
     call set_bytes_written_from_array(data_size*8, msg_size)
 
     ! close group and file
-    call h5_close_group()
-    call h5_close_file_p()
+    if (HDF5_IO_NODES > 1) then
+      call h5_close_group()
+      call h5_close_file()
+    else
+      call h5_close_group()
+      call h5_close_file_p()
+    endif
 
   end subroutine recv_and_write_surface_movie
 
@@ -2465,7 +2956,10 @@ contains
     integer :: it_val
     character(len=2) :: movie_prefix2
     character(len=MAX_STRING_LEN) :: dset_name
+    character(len=MAX_STRING_LEN) :: dset_full_name
     integer :: data_size
+    logical :: use_collective
+    logical :: dset_exists
 
     ! get message size
     call world_get_size_msg(status, msg_size)
@@ -2473,22 +2967,50 @@ contains
     ! size of one data element in bytes
     data_size = CUSTOM_REAL
 
+    ! use collective HDF5 only when there is a single IO node
+    use_collective = H5_COL .and. (HDF5_IO_NODES <= 1)
+
     ! compute actual time-step index for this frame
     it_val = it_first_vol + i_frame * NTSTEP_BETWEEN_FRAMES
 
     ! construct file and group names
-    file_name = trim(OUTPUT_FILES)//"/movie_volume.h5"
+    if (HDF5_IO_NODES > 1) then
+      ! multi-IO-server mode: each IO server writes to its own shard
+      file_name = trim(OUTPUT_FILES)//"/movie_volume.io"//trim(i2c(my_io_id))//".h5"
+    else
+      ! single IO server or no IO sharding: original single file
+      file_name = trim(OUTPUT_FILES)//"/movie_volume.h5"
+    endif
     group_name = "it_"//trim(i2c(it_val))
 
-    ! open file
-    if (H5_COL) then
-      call h5_open_file_p_collect(file_name)
-    else
-      call h5_open_file_p(file_name)
+    if (VERBOSE) then
+      print *, 'io_server: recv_and_write_volume_movie rank', myrank, &
+               ' frame', i_frame+1, ' it =', it_val, ' tag', tag, ' src', tag_src, &
+               ' file =', trim(file_name), ' group =', trim(group_name)
+      call flush_stdout()
     endif
 
-    ! open group collectively (group and datasets have been created beforehand)
-    call h5_open_group(group_name)
+    ! open file
+    if (HDF5_IO_NODES > 1) then
+      ! each IO rank independently opens or creates its own shard file
+      call h5_create_or_open_file(file_name)
+      ! and lazily creates the frame group inside it
+      call h5_open_or_create_group(group_name)
+    else
+      if (use_collective) then
+        call h5_open_file_p_collect(file_name)
+      else
+        call h5_open_file_p(file_name)
+      endif
+
+      ! open group collectively (group and datasets have been created beforehand)
+      call h5_open_group(group_name)
+    endif
+
+    if (VERBOSE) then
+      print *, 'io_server: opened volume group on rank', myrank, ' group =', trim(group_name)
+      call flush_stdout()
+    endif
 
     ista = sum(offset_poin_vol(0:tag_src-1))
     data_len = offset_poin_vol(tag_src)
@@ -2506,38 +3028,85 @@ contains
       if (tag == io_tag_vol_strain_NN) then
         call irecvv_cr_inter(dump_vol1(1:data_len), msg_size, tag_src, tag, req_dummy)
         dset_name = trim(movie_prefix2)//'NN'
+        if (HDF5_IO_NODES > 1) then
+          dset_full_name = trim(group_name)//'/'//trim(dset_name)
+          call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+          if (.not. dset_exists) then
+            call h5_create_dataset_gen_in_group(trim(dset_name), (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+          endif
+        endif
+        if (VERBOSE) then
+          print *, 'io_server: writing vol', trim(dset_name), ' on rank', myrank, ' frame', i_frame+1, &
+                   ' ista =', ista, ' len =', data_len, ' use_collective =', use_collective
+          call flush_stdout()
+        endif
         call start_timer()
-        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol1(1:data_len), (/ista/), H5_COL)
+        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol1(1:data_len), (/ista/), use_collective)
         call stop_timer()
       else if (tag == io_tag_vol_strain_EE) then
         call irecvv_cr_inter(dump_vol2(1:data_len), msg_size, tag_src, tag, req_dummy)
         dset_name = trim(movie_prefix2)//'EE'
+        if (HDF5_IO_NODES > 1) then
+          dset_full_name = trim(group_name)//'/'//trim(dset_name)
+          call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+          if (.not. dset_exists) then
+            call h5_create_dataset_gen_in_group(trim(dset_name), (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+          endif
+        endif
         call start_timer()
-        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol2(1:data_len), (/ista/), H5_COL)
+        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol2(1:data_len), (/ista/), use_collective)
         call stop_timer()
       else if (tag == io_tag_vol_strain_ZZ) then
         call irecvv_cr_inter(dump_vol3(1:data_len), msg_size, tag_src, tag, req_dummy)
         dset_name = trim(movie_prefix2)//'ZZ'
+        if (HDF5_IO_NODES > 1) then
+          dset_full_name = trim(group_name)//'/'//trim(dset_name)
+          call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+          if (.not. dset_exists) then
+            call h5_create_dataset_gen_in_group(trim(dset_name), (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+          endif
+        endif
         call start_timer()
-        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol3(1:data_len), (/ista/), H5_COL)
+        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol3(1:data_len), (/ista/), use_collective)
         call stop_timer()
       else if (tag == io_tag_vol_strain_NE) then
         call irecvv_cr_inter(dump_vol4(1:data_len), msg_size, tag_src, tag, req_dummy)
         dset_name = trim(movie_prefix2)//'NE'
+        if (HDF5_IO_NODES > 1) then
+          dset_full_name = trim(group_name)//'/'//trim(dset_name)
+          call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+          if (.not. dset_exists) then
+            call h5_create_dataset_gen_in_group(trim(dset_name), (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+          endif
+        endif
         call start_timer()
-        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol4(1:data_len), (/ista/), H5_COL)
+        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol4(1:data_len), (/ista/), use_collective)
         call stop_timer()
       else if (tag == io_tag_vol_strain_NZ) then
         call irecvv_cr_inter(dump_vol5(1:data_len), msg_size, tag_src, tag, req_dummy)
         dset_name = trim(movie_prefix2)//'NZ'
+        if (HDF5_IO_NODES > 1) then
+          dset_full_name = trim(group_name)//'/'//trim(dset_name)
+          call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+          if (.not. dset_exists) then
+            call h5_create_dataset_gen_in_group(trim(dset_name), (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+          endif
+        endif
         call start_timer()
-        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol5(1:data_len), (/ista/), H5_COL)
+        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol5(1:data_len), (/ista/), use_collective)
         call stop_timer()
       else if (tag == io_tag_vol_strain_EZ) then
         call irecvv_cr_inter(dump_vol6(1:data_len), msg_size, tag_src, tag, req_dummy)
         dset_name = trim(movie_prefix2)//'EZ'
+        if (HDF5_IO_NODES > 1) then
+          dset_full_name = trim(group_name)//'/'//trim(dset_name)
+          call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+          if (.not. dset_exists) then
+            call h5_create_dataset_gen_in_group(trim(dset_name), (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+          endif
+        endif
         call start_timer()
-        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol6(1:data_len), (/ista/), H5_COL)
+        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol6(1:data_len), (/ista/), use_collective)
         call stop_timer()
       else
         print *, 'Error: unknown volume strain tag in recv_and_write_volume_movie'
@@ -2554,20 +3123,46 @@ contains
       if (tag == io_tag_vol_vec_N) then
         call irecvv_cr_inter(dump_vol1(1:data_len), msg_size, tag_src, tag, req_dummy)
         dset_name = trim(movie_prefix2)//'N'
+        if (HDF5_IO_NODES > 1) then
+          dset_full_name = trim(group_name)//'/'//trim(dset_name)
+          call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+          if (.not. dset_exists) then
+            call h5_create_dataset_gen_in_group(trim(dset_name), (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+          endif
+        endif
         call start_timer()
-        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol1(1:data_len), (/ista/), H5_COL)
+        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol1(1:data_len), (/ista/), use_collective)
         call stop_timer()
-      else if (tag == io_tag_vol_vec_E) then
-        call irecvv_cr_inter(dump_vol2(1:data_len), msg_size, tag_src, tag, req_dummy)
-        dset_name = trim(movie_prefix2)//'E'
+      else if (tag == io_tag_vol_vec_N) then
+        call irecvv_cr_inter(dump_vol1(1:data_len), msg_size, tag_src, tag, req_dummy)
+        dset_name = trim(movie_prefix2)//'N'
+        if (VERBOSE) then
+          print *, 'io_server: writing vol', trim(dset_name), ' on rank', myrank, ' frame', i_frame+1, &
+                   ' ista =', ista, ' len =', data_len, ' use_collective =', use_collective
+          call flush_stdout()
+        endif
+        if (HDF5_IO_NODES > 1) then
+          dset_full_name = trim(group_name)//'/'//trim(dset_name)
+          call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+          if (.not. dset_exists) then
+            call h5_create_dataset_gen_in_group(trim(dset_name), (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+          endif
+        endif
         call start_timer()
-        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol2(1:data_len), (/ista/), H5_COL)
+        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol1(1:data_len), (/ista/), use_collective)
         call stop_timer()
       else if (tag == io_tag_vol_vec_Z) then
         call irecvv_cr_inter(dump_vol3(1:data_len), msg_size, tag_src, tag, req_dummy)
         dset_name = trim(movie_prefix2)//'Z'
+        if (HDF5_IO_NODES > 1) then
+          dset_full_name = trim(group_name)//'/'//trim(dset_name)
+          call h5_check_dataset_exists(trim(dset_full_name), dset_exists)
+          if (.not. dset_exists) then
+            call h5_create_dataset_gen_in_group(trim(dset_name), (/npoints_vol_mov_all_proc/), 1, CUSTOM_REAL)
+          endif
+        endif
         call start_timer()
-        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol3(1:data_len), (/ista/), H5_COL)
+        call h5_write_dataset_collect_hyperslab_in_group(trim(dset_name), dump_vol3(1:data_len), (/ista/), use_collective)
         call stop_timer()
       else
         print *, 'Error: unknown volume vector tag in recv_and_write_volume_movie'
@@ -2585,7 +3180,11 @@ contains
 
     ! close group and file
     call h5_close_group()
-    call h5_close_file_p()
+    if (HDF5_IO_NODES > 1) then
+      call h5_close_file()
+    else
+      call h5_close_file_p()
+    endif
 
   end subroutine recv_and_write_volume_movie
 
