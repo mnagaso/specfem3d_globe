@@ -2071,6 +2071,15 @@
   character(len=MAX_STRING_LEN) :: fname_xdmf_vol, fname_xdmf_vol_oc, fname_xdmf_vol_ic
   character(len=MAX_STRING_LEN) :: fname_h5_data_vol_xdmf
 
+  ! in multi-IO-server mode, write one XDMF file per IO shard
+  if (HDF5_IO_NODES > 1) then
+    call write_xdmf_vol_hdf5_shards(npoints_3dmovie,    nelems_3dmovie, &
+                                    npoints_3dmovie_cm, nelems_3dmovie_cm, &
+                                    npoints_3dmovie_oc, nelems_3dmovie_oc, &
+                                    npoints_3dmovie_ic, nelems_3dmovie_ic)
+    return
+  endif
+
   ! checks if anything do, only main process writes out xdmf file
   if (myrank /= 0) return
 
@@ -2356,5 +2365,321 @@
   i = nelems_3dmovie_oc
 
   end subroutine write_xdmf_vol_hdf5
+
+!
+!-------------------------------------------------------------------------------------------------
+!
+
+  subroutine write_xdmf_vol_hdf5_shards(npoints_3dmovie,    nelems_3dmovie, &
+                                        npoints_3dmovie_cm, nelems_3dmovie_cm, &
+                                        npoints_3dmovie_oc, nelems_3dmovie_oc, &
+                                        npoints_3dmovie_ic, nelems_3dmovie_ic)
+
+  use specfem_par
+  use specfem_par_movie_hdf5
+
+  implicit none
+
+  integer, intent(in) :: npoints_3dmovie,    nelems_3dmovie
+  integer, intent(in) :: npoints_3dmovie_cm, nelems_3dmovie_cm
+  integer, intent(in) :: npoints_3dmovie_oc, nelems_3dmovie_oc
+  integer, intent(in) :: npoints_3dmovie_ic, nelems_3dmovie_ic
+
+  ! local parameters
+  integer                       :: i, ii, io_id
+  character(len=20)             :: it_str, movie_prefix, io_str
+  character(len=MAX_STRING_LEN) :: fname_xdmf_vol, fname_xdmf_vol_oc, fname_xdmf_vol_ic
+  character(len=MAX_STRING_LEN) :: fname_h5_geom, fname_h5_data
+
+  ! only main process writes out xdmf files
+  if (myrank /= 0) return
+
+  ! only needed when using more than one IO server
+  if (HDF5_IO_NODES <= 1) return
+
+  ! geometry (mesh) is always stored in the central volume movie file
+  fname_h5_geom = "./movie_volume.h5"
+
+  do io_id = 0, HDF5_IO_NODES - 1
+
+    io_str = i2c(io_id)
+    fname_h5_data = "./movie_volume.io" // trim(io_str) // ".h5"
+
+    !
+    ! write out the full volume xdmf file (for strain and vector) for this shard
+    !
+    if (output_sv) then
+
+      fname_xdmf_vol = trim(OUTPUT_FILES) // "/movie_volume_io" // trim(io_str) // ".xmf"
+
+      ! open xdmf file
+      open(unit=xdmf_vol, file=trim(fname_xdmf_vol), recl=256)
+
+      call write_xdmf_vol_hdf5_header(nspec_vol_mov_all_proc, npoints_vol_mov_all_proc, &
+                                      fname_h5_geom, xdmf_vol, 1)
+
+      do i = 1, int(NSTEP/NTSTEP_BETWEEN_FRAMES)
+
+        ii = i*NTSTEP_BETWEEN_FRAMES
+        it_str = i2c(ii)
+
+        write(xdmf_vol,*) '<Grid Name="vol_mov" GridType="Uniform">'
+        write(xdmf_vol,*) '<Time Value="'//trim(r2c(sngl((ii-1)*DT-t0)))//'" />'
+        write(xdmf_vol,*) '<Topology Reference="/Xdmf/Domain/Topology" />'
+        write(xdmf_vol,*) '<Geometry Reference="/Xdmf/Domain/Geometry" />'
+
+        ! write headers for each dataset
+
+        ! volume strain
+        if (MOVIE_VOLUME_TYPE == 1 .or. MOVIE_VOLUME_TYPE == 2 .or. MOVIE_VOLUME_TYPE == 3) then
+          if (MOVIE_VOLUME_TYPE == 1) then
+            movie_prefix = 'E' ! strain
+          else if (MOVIE_VOLUME_TYPE == 2) then
+            movie_prefix = 'S' ! time integral of strain
+          else if (MOVIE_VOLUME_TYPE == 3) then
+            movie_prefix = 'P' ! potency, or itegral of strain x \mu
+          endif
+
+          ! movie_prefix/NN,EE,ZZ,NE,NZ,EZ
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, trim(movie_prefix)//'_NN', trim(movie_prefix)//'NN', &
+                                            npoints_vol_mov_all_proc, xdmf_vol, it_str, .true.)
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, trim(movie_prefix)//'_EE', trim(movie_prefix)//'EE', &
+                                            npoints_vol_mov_all_proc, xdmf_vol, it_str, .true.)
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, trim(movie_prefix)//'_ZZ', trim(movie_prefix)//'ZZ', &
+                                            npoints_vol_mov_all_proc, xdmf_vol, it_str, .true.)
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, trim(movie_prefix)//'_NE', trim(movie_prefix)//'NE', &
+                                            npoints_vol_mov_all_proc, xdmf_vol, it_str, .true.)
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, trim(movie_prefix)//'_NZ', trim(movie_prefix)//'NZ', &
+                                            npoints_vol_mov_all_proc, xdmf_vol, it_str, .true.)
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, trim(movie_prefix)//'_EZ', trim(movie_prefix)//'EZ', &
+                                            npoints_vol_mov_all_proc, xdmf_vol, it_str, .true.)
+
+        ! volume vector
+        else if (MOVIE_VOLUME_TYPE == 5 .or. MOVIE_VOLUME_TYPE == 6) then
+          if (MOVIE_VOLUME_TYPE == 5) then
+            movie_prefix = 'DI' ! displacement
+          else if (MOVIE_VOLUME_TYPE == 6) then
+            movie_prefix = 'VE' ! velocity
+          endif
+
+          ! movie_prefix/N,E,Z
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, trim(movie_prefix)//'_N', trim(movie_prefix)//'N', &
+                                            npoints_vol_mov_all_proc, xdmf_vol, it_str, .true.)
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, trim(movie_prefix)//'_E', trim(movie_prefix)//'E', &
+                                            npoints_vol_mov_all_proc, xdmf_vol, it_str, .true.)
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, trim(movie_prefix)//'_Z', trim(movie_prefix)//'Z', &
+                                            npoints_vol_mov_all_proc, xdmf_vol, it_str, .true.)
+
+        endif
+
+        write(xdmf_vol,*) '</Grid>'
+
+      enddo
+
+      call write_xdmf_vol_hdf5_footer(xdmf_vol)
+
+      ! close xdmf file
+      close(xdmf_vol)
+
+    endif ! output_sv
+
+    !
+    ! write out the crust and mantle xdmf file (for strain and vector) for this shard
+    !
+    if (output_cm) then
+
+      fname_xdmf_vol = trim(OUTPUT_FILES) // '/movie_volume_cm_io' // trim(io_str) // '.xmf'
+
+      ! open xdmf file
+      open(unit=xdmf_vol, file=trim(fname_xdmf_vol), recl=256)
+
+      call write_xdmf_vol_hdf5_header(nspec_vol_mov_all_proc_cm_conn, npoints_vol_mov_all_proc_cm, &
+                                      fname_h5_geom, xdmf_vol, 2)
+
+      do i = 1, int(NSTEP/NTSTEP_BETWEEN_FRAMES)
+
+        ii = i*NTSTEP_BETWEEN_FRAMES
+        it_str = i2c(ii)
+
+        write(xdmf_vol,*) '<Grid Name="vol_mov" GridType="Uniform">'
+        write(xdmf_vol,*) '<Time Value="'//trim(r2c(sngl((ii-1)*DT-t0)))//'" />'
+        write(xdmf_vol,*) '<Topology Reference="/Xdmf/Domain/Topology" />'
+        write(xdmf_vol,*) '<Geometry Reference="/Xdmf/Domain/Geometry" />'
+
+        ! write headers for each dataset
+        ! volume divcurl (div)
+        if (MOVIE_VOLUME_TYPE == 4 .and. MOVIE_OUTPUT_DIV) then
+          ! reg1_div_displ
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, 'reg1_div_displ', 'reg1_div_displ', &
+                                            npoints_vol_mov_all_proc_cm, xdmf_vol, it_str, .true.) ! value on element
+        else if (MOVIE_VOLUME_TYPE == 4 .and. MOVIE_OUTPUT_CURL) then
+          ! curst_mantle_epsdev_disple_xx,yy,xy,xz,yz
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, 'crust_mantle_epsdev_displ_xx', 'crust_mantle_epsdev_displ_xx', &
+                                            npoints_vol_mov_all_proc_cm, xdmf_vol, it_str, .true.) ! value on element
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, 'crust_mantle_epsdev_displ_yy', 'crust_mantle_epsdev_displ_yy', &
+                                            npoints_vol_mov_all_proc_cm, xdmf_vol, it_str, .true.) ! value on element
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, 'crust_mantle_epsdev_displ_xy', 'crust_mantle_epsdev_displ_xy', &
+                                            npoints_vol_mov_all_proc_cm, xdmf_vol, it_str, .true.) ! value on element
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, 'crust_mantle_epsdev_displ_xz', 'crust_mantle_epsdev_displ_xz', &
+                                            npoints_vol_mov_all_proc_cm, xdmf_vol, it_str, .true.) ! value on element
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, 'crust_mantle_epsdev_displ_yz', 'crust_mantle_epsdev_displ_yz', &
+                                            npoints_vol_mov_all_proc_cm, xdmf_vol, it_str, .true.) ! value on element
+        else if (MOVIE_VOLUME_TYPE == 4 .and. MOVIE_OUTPUT_CURLNORM) then
+          ! reg1_epsdev_displ_norm
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, 'reg1_epsdev_displ_norm', 'reg1_epsdev_displ_norm', &
+                                            npoints_vol_mov_all_proc_cm, xdmf_vol, it_str, .true.) ! value on element
+        endif
+
+        write(xdmf_vol,*) '</Grid>'
+
+      enddo
+
+      call write_xdmf_vol_hdf5_footer(xdmf_vol)
+
+      ! close xdmf file
+      close(xdmf_vol)
+
+    endif ! output_cm
+
+    !
+    ! write out the outer core xdmf file for this shard
+    !
+    if (output_oc) then
+
+      fname_xdmf_vol_oc = trim(OUTPUT_FILES) // '/movie_volume_oc_io' // trim(io_str) // '.xmf'
+
+      ! open xdmf file
+      open(unit=xdmf_vol, file=trim(fname_xdmf_vol_oc), recl=256)
+
+      call write_xdmf_vol_hdf5_header(nspec_vol_mov_all_proc_oc_conn, npoints_vol_mov_all_proc_oc, &
+                                      fname_h5_geom, xdmf_vol, 3)
+
+      do i = 1, int(NSTEP/NTSTEP_BETWEEN_FRAMES)
+
+        ii = i*NTSTEP_BETWEEN_FRAMES
+        it_str = i2c(ii)
+
+        write(xdmf_vol,*) '<Grid Name="vol_mov" GridType="Uniform">'
+        write(xdmf_vol,*) '<Time Value="'//trim(r2c(sngl((ii-1)*DT-t0)))//'" />'
+        write(xdmf_vol,*) '<Topology Reference="/Xdmf/Domain/Topology" />'
+        write(xdmf_vol,*) '<Geometry Reference="/Xdmf/Domain/Geometry" />'
+
+        ! write headers for each dataset
+        if (MOVIE_VOLUME_TYPE == 4 .and. MOVIE_OUTPUT_DIV) then
+          ! reg2_div_displ
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, 'reg2_div_displ', 'reg2_div_displ', &
+                                            npoints_vol_mov_all_proc_oc, xdmf_vol, it_str, .true.)
+        else if (MOVIE_VOLUME_TYPE == 4 .and. MOVIE_OUTPUT_CURL) then
+          ! no output
+        else if (MOVIE_VOLUME_TYPE == 4 .and. MOVIE_OUTPUT_CURLNORM) then
+          ! no output
+        else if (MOVIE_VOLUME_TYPE == 7 .and. OUTPUT_OUTER_CORE) then
+          ! reg2_displ
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, 'reg2_displ', 'reg2_displ', &
+                                            npoints_vol_mov_all_proc_oc, xdmf_vol, it_str, .true.)
+        else if (MOVIE_VOLUME_TYPE == 8 .and. OUTPUT_OUTER_CORE) then
+          ! reg2_veloc
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, 'reg2_veloc', 'reg2_veloc', &
+                                            npoints_vol_mov_all_proc_oc, xdmf_vol, it_str, .true.)
+        else if (MOVIE_VOLUME_TYPE == 9 .and. OUTPUT_OUTER_CORE) then
+          ! reg2_accel
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, 'reg2_accel', 'reg2_accel', &
+                                            npoints_vol_mov_all_proc_oc, xdmf_vol, it_str, .true.)
+        endif
+
+        write(xdmf_vol,*) '</Grid>'
+
+      enddo
+
+      call write_xdmf_vol_hdf5_footer(xdmf_vol)
+
+      ! close xdmf file
+      close(xdmf_vol)
+
+    endif ! output_oc
+
+    !
+    ! write out the inner core xdmf file for this shard
+    !
+    if (output_ic) then
+
+      fname_xdmf_vol_ic = trim(OUTPUT_FILES) // '/movie_volume_ic_io' // trim(io_str) // '.xmf'
+
+      ! open xdmf file
+      open(unit=xdmf_vol, file=trim(fname_xdmf_vol_ic), recl=256)
+
+      call write_xdmf_vol_hdf5_header(nspec_vol_mov_all_proc_ic_conn, npoints_vol_mov_all_proc_ic, &
+                                      fname_h5_geom, xdmf_vol, 4)
+
+      do i = 1, int(NSTEP/NTSTEP_BETWEEN_FRAMES)
+
+        ii = i*NTSTEP_BETWEEN_FRAMES
+        it_str = i2c(ii)
+
+        write(xdmf_vol,*) '<Grid Name="vol_mov" GridType="Uniform">'
+        write(xdmf_vol,*) '<Time Value="'//trim(r2c(sngl((ii-1)*DT-t0)))//'" />'
+        write(xdmf_vol,*) '<Topology Reference="/Xdmf/Domain/Topology" />'
+        write(xdmf_vol,*) '<Geometry Reference="/Xdmf/Domain/Geometry" />'
+
+        ! write headers for each dataset
+        if (MOVIE_VOLUME_TYPE == 4 .and. MOVIE_OUTPUT_DIV) then
+          ! reg3_div_displ
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, 'reg3_div_displ', 'reg3_div_displ', &
+                                            npoints_vol_mov_all_proc_ic, xdmf_vol, it_str, .true.)
+        else if (MOVIE_VOLUME_TYPE == 4 .and. MOVIE_OUTPUT_CURL) then
+          ! inner_core_epsdev_disple_xx,yy,xy,xz,yz
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, 'inner_core_epsdev_displ_xx', 'inner_core_epsdev_displ_xx', &
+                                            npoints_vol_mov_all_proc_ic, xdmf_vol, it_str, .true.)
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, 'inner_core_epsdev_displ_yy', 'inner_core_epsdev_displ_yy', &
+                                            npoints_vol_mov_all_proc_ic, xdmf_vol, it_str, .true.)
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, 'inner_core_epsdev_displ_xy', 'inner_core_epsdev_displ_xy', &
+                                            npoints_vol_mov_all_proc_ic, xdmf_vol, it_str, .true.)
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, 'inner_core_epsdev_displ_xz', 'inner_core_epsdev_displ_xz', &
+                                            npoints_vol_mov_all_proc_ic, xdmf_vol, it_str, .true.)
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, 'inner_core_epsdev_displ_yz', 'inner_core_epsdev_displ_yz', &
+                                            npoints_vol_mov_all_proc_ic, xdmf_vol, it_str, .true.)
+        else if (MOVIE_VOLUME_TYPE == 4 .and. MOVIE_OUTPUT_CURLNORM) then
+          ! reg3_epsdev_displ_norm
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, 'reg3_epsdev_displ_norm', 'reg3_epsdev_displ_norm', &
+                                            npoints_vol_mov_all_proc_ic, xdmf_vol, it_str, .true.)
+        else if (MOVIE_VOLUME_TYPE == 7 .and. OUTPUT_INNER_CORE) then
+          ! reg3_displ
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, 'reg3_displ', 'reg3_displ', &
+                                            npoints_vol_mov_all_proc_ic, xdmf_vol, it_str, .true.)
+        else if (MOVIE_VOLUME_TYPE == 8 .and. OUTPUT_INNER_CORE) then
+          ! reg3_veloc
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, 'reg3_veloc', 'reg3_veloc', &
+                                            npoints_vol_mov_all_proc_ic, xdmf_vol, it_str, .true.)
+        else if (MOVIE_VOLUME_TYPE == 9 .and. OUTPUT_INNER_CORE) then
+          ! reg3_accel
+          call write_xdmf_vol_hdf5_one_data(fname_h5_data, 'reg3_accel', 'reg3_accel', &
+                                            npoints_vol_mov_all_proc_ic, xdmf_vol, it_str, .true.)
+        endif
+
+        write(xdmf_vol,*) '</Grid>'
+
+      enddo
+
+      call write_xdmf_vol_hdf5_footer(xdmf_vol)
+
+      ! close xdmf file
+      close(xdmf_vol)
+
+    endif ! output_ic
+
+  enddo ! io_id
+
+  ! to avoid compiler warnings about unused arguments
+  i = npoints_3dmovie
+  i = npoints_3dmovie_cm
+  i = npoints_3dmovie_ic
+  i = npoints_3dmovie_oc
+
+  i = nelems_3dmovie
+  i = nelems_3dmovie_cm
+  i = nelems_3dmovie_ic
+  i = nelems_3dmovie_oc
+
+  end subroutine write_xdmf_vol_hdf5_shards
 
 #endif
