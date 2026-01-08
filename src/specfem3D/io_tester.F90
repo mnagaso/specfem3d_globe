@@ -59,7 +59,7 @@ module io_bandwidth
       implicit none
       integer :: i, total_bytes, unit_number, ierr
       double precision :: elapsed_time, max_elapsed_time, &
-              bandwidth, total_bandwidth
+    	      bandwidth, total_bandwidth, current_time
       character(len=20) :: filename
       character(len=10) :: mygroup_str
       logical :: file_exists
@@ -101,37 +101,45 @@ module io_bandwidth
           ! get the maximum elapsed time across all processes
           call max_all_dp(elapsed_time, max_elapsed_time)
 
-          ! calculate total bandwidth
-          total_bandwidth = total_bytes / (max_elapsed_time * 1.0e6) ! Bandwidth in MB/s
+            ! calculate total bandwidth
+            total_bandwidth = total_bytes / (max_elapsed_time * 1.0e6) ! Bandwidth in MB/s
 
-          ! Each process writes to the file sequentially
-          do i = 0, NPROCTOT_VAL-1
+            ! Each process writes to the file sequentially
+            do i = 0, NPROCTOT_VAL-1
               if (myrank == i) then
-                  open(unit=unit_number, file=filename, status='old', action='write', position='append', iostat=ierr)
-                  if (ierr /= 0) then
-                      print*, 'Error opening file: ', filename
-                      stop
-                  end if
-                  write(unit_number, '(A, I0, A, I0, A, I0, A, F12.6, A, F12.6, A, F12.6)') &
-                      'mygroup: ', mygroup, ', myrank: ', myrank, ', bytes_written: ', bytes_written, &
-                      ', elapsed_time (s): ', elapsed_time, ', bandwidth: ', bandwidth, ' MB/s'
-                  close(unit_number)
-              end if
-              call synchronize_all()
-          end do
-
-          ! Only the root process writes the total bandwidth
-          if (myrank == 0) then
-              open(unit=unit_number, file=filename, status='old', action='write', position='append', iostat=ierr)
-              if (ierr /= 0) then
+                open(unit=unit_number, file=filename, status='old', action='write', position='append', iostat=ierr)
+                if (ierr /= 0) then
                   print*, 'Error opening file: ', filename
                   stop
+                end if
+
+                ! record MPI wall-clock time for this rank's bandwidth entry
+                current_time = MPI_Wtime()
+
+                write(unit_number, '(A, I0, A, I0, A, I0, A, F12.6, A, F12.6, A, F12.6, A, F20.6)') &
+                  'mygroup: ', mygroup, ', myrank: ', myrank, ', bytes_written: ', bytes_written, &
+                  ', elapsed_time (s): ', elapsed_time, ', bandwidth: ', bandwidth, ' MB/s, mpi_wtime (s): ', current_time
+                close(unit_number)
               end if
-              write(unit_number, '(A, I0, A, I0, A, F12.6, A, F12.6, A, F12.6)') &
-                  'mygroup: ', mygroup, ', total_bytes_written: ', total_bytes, ', max_elapsed_time (s): ', &
-                  max_elapsed_time, ', total_bandwidth: ', total_bandwidth, ' MB/s'
+              call synchronize_all()
+            end do
+
+            ! Only the root process writes the total bandwidth
+            if (myrank == 0) then
+              open(unit=unit_number, file=filename, status='old', action='write', position='append', iostat=ierr)
+              if (ierr /= 0) then
+                print*, 'Error opening file: ', filename
+                stop
+              end if
+
+              ! record MPI wall-clock time for this I/O bandwidth measurement
+              current_time = MPI_Wtime()
+
+              write(unit_number, '(A, I0, A, I0, A, F12.6, A, F12.6, A, F20.6)') &
+      	          'mygroup: ', mygroup, ', total_bytes_written: ', total_bytes, ', max_elapsed_time (s): ', &
+      	          max_elapsed_time, ', total_bandwidth: ', total_bandwidth, ' MB/s, mpi_wtime (s): ', current_time
               close(unit_number)
-          end if
+            end if
       end if
     end subroutine calculate_bandwidth_all_procs
 
