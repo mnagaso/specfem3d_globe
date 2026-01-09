@@ -62,6 +62,9 @@ module io_bandwidth
     	      bandwidth, total_bandwidth, current_time
       character(len=20) :: filename
       character(len=10) :: mygroup_str
+      character(len=8) :: date_str
+      character(len=10) :: time_str
+      integer :: datetime_values(8)
       logical :: file_exists
 
       ! Convert mygroup to a character string
@@ -113,12 +116,14 @@ module io_bandwidth
                   stop
                 end if
 
-                ! record MPI wall-clock time for this rank's bandwidth entry
+                ! record MPI wall-clock time and system date/time for this rank's bandwidth entry
                 current_time = MPI_Wtime()
+                call date_and_time(date=date_str, time=time_str, values=datetime_values)
 
-                write(unit_number, '(A, I0, A, I0, A, I0, A, F12.6, A, F12.6, A, F12.6, A, F20.6)') &
+                write(unit_number, '(A, I0, A, I0, A, I0, A, F12.6, A, F12.6, A, F24.12, A, A, A, A)') &
                   'mygroup: ', mygroup, ', myrank: ', myrank, ', bytes_written: ', bytes_written, &
-                  ', elapsed_time (s): ', elapsed_time, ', bandwidth: ', bandwidth, ' MB/s, mpi_wtime (s): ', current_time
+                  ', elapsed_time (s): ', elapsed_time, ', bandwidth: ', bandwidth, ' MB/s, mpi_wtime (s): ', current_time, &
+                  ', date: ', trim(date_str), ', time: ', trim(time_str)
                 close(unit_number)
               end if
               call synchronize_all()
@@ -132,12 +137,14 @@ module io_bandwidth
                 stop
               end if
 
-              ! record MPI wall-clock time for this I/O bandwidth measurement
+              ! record MPI wall-clock time and system date/time for this I/O bandwidth measurement
               current_time = MPI_Wtime()
+              call date_and_time(date=date_str, time=time_str, values=datetime_values)
 
-              write(unit_number, '(A, I0, A, I0, A, F12.6, A, F12.6, A, F20.6)') &
-      	          'mygroup: ', mygroup, ', total_bytes_written: ', total_bytes, ', max_elapsed_time (s): ', &
-      	          max_elapsed_time, ', total_bandwidth: ', total_bandwidth, ' MB/s, mpi_wtime (s): ', current_time
+              write(unit_number, '(A, I0, A, I0, A, F12.6, A, F12.6, A, F24.12, A, A, A, A, A, I0)') &
+	          'mygroup: ', mygroup, ', total_bytes_written: ', total_bytes, ', max_elapsed_time (s): ', &
+	          max_elapsed_time, ', total_bandwidth: ', total_bandwidth, ' MB/s, mpi_wtime (s): ', current_time, &
+            ', date: ', trim(date_str), ', time: ', trim(time_str), ', ms: ', datetime_values(8)
               close(unit_number)
             end if
       end if
