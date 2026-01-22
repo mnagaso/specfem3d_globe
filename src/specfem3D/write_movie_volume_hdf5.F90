@@ -633,9 +633,6 @@
   ! use IO server when dedicated HDF5 IO nodes are enabled
   if (HDF5_IO_NODES > 0) then
 
-    ! ensure all previous nonblocking sends have completed
-    call wait_all_send()
-
     ! debug: log volume strain movie send on compute side
     print *, 'compute vol_strain_send: it', it, 'rank', myrank, 'dest_ionod', dest_ionod, 'npoints', ipoints_3dmovie
 
@@ -665,6 +662,13 @@
     n_req_vol = n_req_vol + 1
     call isend_cr_inter(store_val3d_EZ,ipoints_3dmovie,dest_ionod, &
                         io_tag_vol_strain_EZ,req_dump_vol(n_req_vol))
+
+    ! CRITICAL FIX: Wait for all volume movie sends to complete before returning
+    ! to the time loop. This prevents MPI resource conflicts between the inter-
+    ! communicator (compute<->IO) and the compute-only communicator (boundary exchange).
+    ! Without this, the boundary exchange in compute_forces_* can fail with SIGSEGV
+    ! when large volume movie data is still being transferred.
+    call wait_all_send()
 
   else
 
@@ -766,11 +770,14 @@
                                        epsilondev_xz_inner_core,epsilondev_yz_inner_core)
 
 ! outputs divergence and curl: MOVIE_VOLUME_TYPE == 4
+!
+! NOTE: IO server mode (HDF5_IO_NODES > 0) is NOT yet supported for this movie type.
+!       Use direct HDF5 parallel I/O (HDF5_IO_NODES = 0) instead.
 
   use constants_solver
 
 #ifdef USE_HDF5
-  use shared_parameters, only: OUTPUT_FILES
+  use shared_parameters, only: OUTPUT_FILES,HDF5_IO_NODES
   use specfem_par, only: it, H5_COL
   use specfem_par_crustmantle, only: ibool_crust_mantle
   use specfem_par_innercore, only: ibool_inner_core
@@ -807,6 +814,12 @@
   real(kind=CUSTOM_REAL), dimension(:,:,:,:), allocatable :: div_s_outer_core
   integer :: ispec,iglob,i,j,k,ier
   real(kind=CUSTOM_REAL), dimension(:), allocatable :: tmp_data
+
+  ! IO server mode not supported for divcurl volume movie
+  if (HDF5_IO_NODES > 0) then
+    call exit_MPI(myrank,'IO server mode (HDF5_IO_NODES > 0) not yet supported for MOVIE_VOLUME_TYPE = 4 (divcurl). ' // &
+                         'Please set HDF5_IO_NODES = 0 to use direct HDF5 parallel I/O.')
+  endif
 
   ! checks
   if (vnspec_cm /= NSPEC_CRUST_MANTLE) call exit_MPI(myrank,'Invalid vnspec_cm value for write_movie_volume_divcurl() routine')
@@ -1110,9 +1123,6 @@
   ! use IO server when dedicated HDF5 IO nodes are enabled
   if (HDF5_IO_NODES > 0) then
 
-    ! ensure all previous nonblocking sends have completed
-    call wait_all_send()
-
     ! send vector components to IO server
     n_req_vol = 0
 
@@ -1127,6 +1137,11 @@
     n_req_vol = n_req_vol + 1
     call isend_cr_inter(store_val3d_Z(1:npoints_3dmovie),npoints_3dmovie,dest_ionod, &
                         io_tag_vol_vec_Z,req_dump_vol(n_req_vol))
+
+    ! CRITICAL FIX: Wait for all volume movie sends to complete before returning
+    ! to the time loop. This prevents MPI resource conflicts between the inter-
+    ! communicator (compute<->IO) and the compute-only communicator (boundary exchange).
+    call wait_all_send()
 
   else
 
@@ -1203,9 +1218,11 @@
   use constants_solver
 
 #ifdef USE_HDF5
-  use shared_parameters, only: OUTPUT_FILES
+  use shared_parameters, only: OUTPUT_FILES,HDF5_IO_NODES
   use specfem_par, only: it, scale_displ, H5_COL
   use specfem_par_movie_hdf5
+  use io_server_hdf5, only: io_tag_vol_norm_cm, io_tag_vol_norm_oc, io_tag_vol_norm_ic, &
+                            dest_ionod, n_req_vol, req_dump_vol, wait_all_send
 #endif
 
   implicit none
@@ -1222,131 +1239,156 @@
 
   ! local parameters
   integer :: ispec,iglob,i,j,k,ier
-  real(kind=CUSTOM_REAL), dimension(:), allocatable :: tmp_data
+  real(kind=CUSTOM_REAL), dimension(:), allocatable :: tmp_data_cm
+  real(kind=CUSTOM_REAL), dimension(:), allocatable :: tmp_data_oc
+  real(kind=CUSTOM_REAL), dimension(:), allocatable :: tmp_data_ic
 
-  ! initialize h5 file for volume movie
-  call world_get_comm(comm)
-  call world_get_info_null(info)
-  call h5_initialize()
-  call h5_set_mpi_info(comm, info, myrank, NPROCTOT_VAL)
-
-  file_name = trim(OUTPUT_FILES) // '/movie_volume.h5'
-  group_name = 'it_' // trim(i2c(it))
-
-  ! create group and datasets
-  if (myrank == 0) then
-    call h5_open_file(file_name)
-    call h5_open_or_create_group(group_name)
-
-    if (OUTPUT_CRUST_MANTLE) then
-      call h5_create_dataset_gen_in_group('reg1_displ', (/npoints_vol_mov_all_proc_cm/), 1, CUSTOM_REAL)
-    endif
-    if (OUTPUT_OUTER_CORE) then
-      call h5_create_dataset_gen_in_group('reg2_displ', (/npoints_vol_mov_all_proc_oc/), 1, CUSTOM_REAL)
-    endif
-    if (OUTPUT_INNER_CORE) then
-      call h5_create_dataset_gen_in_group('reg3_displ', (/npoints_vol_mov_all_proc_ic/), 1, CUSTOM_REAL)
-    endif
-
-    call h5_close_group()
-    call h5_close_file()
-  endif
-
-  call synchronize_all()
-
-  ! write the data
-  if (H5_COL) then
-    ! open file
-    call h5_open_file_p_collect(file_name)
-  else
-    ! open file
-    call h5_open_file_p(file_name)
-  endif
-  call h5_open_group(group_name)
-
-  ! outputs norm of displacement
+  ! compute norm of displacement for each region
   if (OUTPUT_CRUST_MANTLE) then
-    ! crust mantle
-    ! these binary arrays can be converted into mesh format using the utility ./bin/xcombine_vol_data
-    allocate(tmp_data(NGLOB_CRUST_MANTLE),stat=ier)
-    if (ier /= 0 ) call exit_MPI(myrank,'Error allocating temporary array tmp_data')
+    allocate(tmp_data_cm(NGLOB_CRUST_MANTLE),stat=ier)
+    if (ier /= 0) call exit_MPI(myrank,'Error allocating tmp_data_cm')
 
     do ispec = 1, NSPEC_CRUST_MANTLE
       do k = 1, NGLLZ
         do j = 1, NGLLY
           do i = 1, NGLLX
             iglob = ibool_crust_mantle(i,j,k,ispec)
-            ! norm
-            tmp_data(iglob) = real(scale_displ,kind=CUSTOM_REAL) * sqrt( displ_crust_mantle(1,iglob)**2 &
+            tmp_data_cm(iglob) = real(scale_displ,kind=CUSTOM_REAL) * sqrt( displ_crust_mantle(1,iglob)**2 &
                                           + displ_crust_mantle(2,iglob)**2 &
                                           + displ_crust_mantle(3,iglob)**2 )
           enddo
         enddo
       enddo
     enddo
-    call h5_write_dataset_collect_hyperslab_in_group('reg1_displ', tmp_data, &
-                                                   (/sum(offset_nglob_cm(0:myrank-1))/), H5_COL)
-    !call write_array3dspec_as_1d_hdf5('reg1_displ', offset_nspec_cm(myrank-1), offset_nglob_cm(myrank-1), &
-    !                                  tmp_data, sum(offset_nglob_cm(0:myrank-1)), ibool_crust_mantle)
-
-    deallocate(tmp_data)
   endif
 
   if (OUTPUT_OUTER_CORE) then
-    ! outer core
-    allocate(tmp_data(NGLOB_OUTER_CORE),stat=ier)
-    if (ier /= 0 ) call exit_MPI(myrank,'Error allocating temporary array tmp_data')
+    allocate(tmp_data_oc(NGLOB_OUTER_CORE),stat=ier)
+    if (ier /= 0) call exit_MPI(myrank,'Error allocating tmp_data_oc')
 
     do ispec = 1, NSPEC_OUTER_CORE
       do k = 1, NGLLZ
         do j = 1, NGLLY
           do i = 1, NGLLX
             iglob = ibool_outer_core(i,j,k,ispec)
-            ! norm
-            ! note: disp_outer_core is potential, this just outputs the potential,
-            !          not the actual displacement u = grad(rho * Chi) / rho
-            tmp_data(iglob) = abs(displ_outer_core(iglob))
+            ! note: disp_outer_core is potential, this just outputs the potential
+            tmp_data_oc(iglob) = abs(displ_outer_core(iglob))
           enddo
         enddo
       enddo
     enddo
-    call h5_write_dataset_collect_hyperslab_in_group('reg2_displ', tmp_data, &
-                                           (/sum(offset_nglob_oc(0:myrank-1))/), H5_COL)
-    !call write_array3dspec_as_1d_hdf5('reg2_displ', offset_nspec_oc(myrank-1), offset_nglob_oc(myrank-1), &
-    !                                  tmp_data, sum(offset_nglob_oc(0:myrank-1)), ibool_outer_core)
-
-    deallocate(tmp_data)
   endif
 
   if (OUTPUT_INNER_CORE) then
-    ! inner core
-    allocate(tmp_data(NGLOB_INNER_CORE),stat=ier)
-    if (ier /= 0 ) call exit_MPI(myrank,'Error allocating temporary array tmp_data')
+    allocate(tmp_data_ic(NGLOB_INNER_CORE),stat=ier)
+    if (ier /= 0) call exit_MPI(myrank,'Error allocating tmp_data_ic')
 
     do ispec = 1, NSPEC_INNER_CORE
       do k = 1, NGLLZ
         do j = 1, NGLLY
           do i = 1, NGLLX
             iglob = ibool_inner_core(i,j,k,ispec)
-            ! norm
-            tmp_data(iglob) = real(scale_displ,kind=CUSTOM_REAL) * sqrt( displ_inner_core(1,iglob)**2 &
+            tmp_data_ic(iglob) = real(scale_displ,kind=CUSTOM_REAL) * sqrt( displ_inner_core(1,iglob)**2 &
                                           + displ_inner_core(2,iglob)**2 &
                                           + displ_inner_core(3,iglob)**2 )
           enddo
         enddo
       enddo
     enddo
-    call h5_write_dataset_collect_hyperslab_in_group('reg3_displ', tmp_data, &
-                                           (/sum(offset_nglob_ic(0:myrank-1))/), H5_COL)
-    !call write_array3dspec_as_1d_hdf5('reg3_displ', offset_nspec_ic(myrank-1), offset_nglob_ic(myrank-1), &
-    !                                  tmp_data, sum(offset_nglob_ic(0:myrank-1)), ibool_inner_core)
-
-    deallocate(tmp_data)
   endif
 
-  call h5_close_group()
-  call h5_close_file_p()
+  ! use IO server when dedicated HDF5 IO nodes are enabled
+  if (HDF5_IO_NODES > 0) then
 
+    ! send norm data to IO server for each region
+    n_req_vol = 0
+
+    if (OUTPUT_CRUST_MANTLE) then
+      n_req_vol = n_req_vol + 1
+      call isend_cr_inter(tmp_data_cm(1:NGLOB_CRUST_MANTLE), NGLOB_CRUST_MANTLE, dest_ionod, &
+                          io_tag_vol_norm_cm, req_dump_vol(n_req_vol))
+    endif
+
+    if (OUTPUT_OUTER_CORE) then
+      n_req_vol = n_req_vol + 1
+      call isend_cr_inter(tmp_data_oc(1:NGLOB_OUTER_CORE), NGLOB_OUTER_CORE, dest_ionod, &
+                          io_tag_vol_norm_oc, req_dump_vol(n_req_vol))
+    endif
+
+    if (OUTPUT_INNER_CORE) then
+      n_req_vol = n_req_vol + 1
+      call isend_cr_inter(tmp_data_ic(1:NGLOB_INNER_CORE), NGLOB_INNER_CORE, dest_ionod, &
+                          io_tag_vol_norm_ic, req_dump_vol(n_req_vol))
+    endif
+
+    ! wait for all sends to complete before returning to time loop
+    call wait_all_send()
+
+  else
+
+    ! direct HDF5 parallel I/O mode
+    ! initialize h5 file for volume movie
+    call world_get_comm(comm)
+    call world_get_info_null(info)
+    call h5_initialize()
+    call h5_set_mpi_info(comm, info, myrank, NPROCTOT_VAL)
+
+    file_name = trim(OUTPUT_FILES) // '/movie_volume.h5'
+    group_name = 'it_' // trim(i2c(it))
+
+    ! create group and datasets
+    if (myrank == 0) then
+      call h5_open_file(file_name)
+      call h5_open_or_create_group(group_name)
+
+      if (OUTPUT_CRUST_MANTLE) then
+        call h5_create_dataset_gen_in_group('reg1_displ', (/npoints_vol_mov_all_proc_cm/), 1, CUSTOM_REAL)
+      endif
+      if (OUTPUT_OUTER_CORE) then
+        call h5_create_dataset_gen_in_group('reg2_displ', (/npoints_vol_mov_all_proc_oc/), 1, CUSTOM_REAL)
+      endif
+      if (OUTPUT_INNER_CORE) then
+        call h5_create_dataset_gen_in_group('reg3_displ', (/npoints_vol_mov_all_proc_ic/), 1, CUSTOM_REAL)
+      endif
+
+      call h5_close_group()
+      call h5_close_file()
+    endif
+
+    call synchronize_all()
+
+    ! write the data
+    if (H5_COL) then
+      call h5_open_file_p_collect(file_name)
+    else
+      call h5_open_file_p(file_name)
+    endif
+    call h5_open_group(group_name)
+
+    if (OUTPUT_CRUST_MANTLE) then
+      call h5_write_dataset_collect_hyperslab_in_group('reg1_displ', tmp_data_cm, &
+                                                     (/sum(offset_nglob_cm(0:myrank-1))/), H5_COL)
+    endif
+
+    if (OUTPUT_OUTER_CORE) then
+      call h5_write_dataset_collect_hyperslab_in_group('reg2_displ', tmp_data_oc, &
+                                             (/sum(offset_nglob_oc(0:myrank-1))/), H5_COL)
+    endif
+
+    if (OUTPUT_INNER_CORE) then
+      call h5_write_dataset_collect_hyperslab_in_group('reg3_displ', tmp_data_ic, &
+                                             (/sum(offset_nglob_ic(0:myrank-1))/), H5_COL)
+    endif
+
+    call h5_close_group()
+    call h5_close_file_p()
+
+  endif
+
+  ! deallocate temporary arrays
+  if (allocated(tmp_data_cm)) deallocate(tmp_data_cm)
+  if (allocated(tmp_data_oc)) deallocate(tmp_data_oc)
+  if (allocated(tmp_data_ic)) deallocate(tmp_data_ic)
 
 #else
   ! no HDF5 support
@@ -1381,9 +1423,11 @@
   use constants_solver
 
 #ifdef USE_HDF5
-  use shared_parameters, only: OUTPUT_FILES
+  use shared_parameters, only: OUTPUT_FILES,HDF5_IO_NODES
   use specfem_par, only: it, scale_veloc, H5_COL
   use specfem_par_movie_hdf5
+  use io_server_hdf5, only: io_tag_vol_norm_cm, io_tag_vol_norm_oc, io_tag_vol_norm_ic, &
+                            dest_ionod, n_req_vol, req_dump_vol, wait_all_send
 #endif
 
   implicit none
@@ -1400,131 +1444,154 @@
 
   ! local parameters
   integer :: ispec,iglob,i,j,k,ier
-  real(kind=CUSTOM_REAL), dimension(:), allocatable :: tmp_data
+  real(kind=CUSTOM_REAL), dimension(:), allocatable :: tmp_data_cm
+  real(kind=CUSTOM_REAL), dimension(:), allocatable :: tmp_data_oc
+  real(kind=CUSTOM_REAL), dimension(:), allocatable :: tmp_data_ic
 
-  ! initialize h5 file for volume movie
-  call world_get_comm(comm)
-  call world_get_info_null(info)
-  call h5_initialize()
-  call h5_set_mpi_info(comm, info, myrank, NPROCTOT_VAL)
-
-  file_name = trim(OUTPUT_FILES) // '/movie_volume.h5'
-  group_name = 'it_' // trim(i2c(it))
-
-  ! create group and datasets
-  if (myrank == 0) then
-    call h5_open_file(file_name)
-    call h5_open_or_create_group(group_name)
-
-    if (OUTPUT_CRUST_MANTLE) then
-      call h5_create_dataset_gen_in_group('reg1_veloc', (/npoints_vol_mov_all_proc_cm/), 1, CUSTOM_REAL)
-    endif
-    if (OUTPUT_OUTER_CORE) then
-      call h5_create_dataset_gen_in_group('reg2_veloc', (/npoints_vol_mov_all_proc_oc/), 1, CUSTOM_REAL)
-    endif
-    if (OUTPUT_INNER_CORE) then
-      call h5_create_dataset_gen_in_group('reg3_veloc', (/npoints_vol_mov_all_proc_ic/), 1, CUSTOM_REAL)
-    endif
-
-    call h5_close_group()
-    call h5_close_file()
-  endif
-
-  call synchronize_all()
-
-  ! write the data
-  if (H5_COL) then
-    ! open file
-    call h5_open_file_p_collect(file_name)
-  else
-    ! open file
-    call h5_open_file_p(file_name)
-  endif
-  call h5_open_group(group_name)
-
-  ! outputs norm of velocity
+  ! compute norm of velocity for each region
   if (OUTPUT_CRUST_MANTLE) then
-    ! crust mantle
-    ! these binary arrays can be converted into mesh format using the utility ./bin/xcombine_vol_data
-    allocate(tmp_data(NGLOB_CRUST_MANTLE),stat=ier)
-    if (ier /= 0 ) call exit_MPI(myrank,'Error allocating temporary array tmp_data')
+    allocate(tmp_data_cm(NGLOB_CRUST_MANTLE),stat=ier)
+    if (ier /= 0) call exit_MPI(myrank,'Error allocating tmp_data_cm')
 
     do ispec = 1, NSPEC_CRUST_MANTLE
       do k = 1, NGLLZ
         do j = 1, NGLLY
           do i = 1, NGLLX
             iglob = ibool_crust_mantle(i,j,k,ispec)
-            ! norm of velocity
-            tmp_data(iglob) = real(scale_veloc,kind=CUSTOM_REAL) * sqrt( veloc_crust_mantle(1,iglob)**2 &
+            tmp_data_cm(iglob) = real(scale_veloc,kind=CUSTOM_REAL) * sqrt( veloc_crust_mantle(1,iglob)**2 &
                                           + veloc_crust_mantle(2,iglob)**2 &
                                           + veloc_crust_mantle(3,iglob)**2 )
           enddo
         enddo
       enddo
     enddo
-    call h5_write_dataset_collect_hyperslab_in_group('reg1_veloc', tmp_data, &
-                                                   (/sum(offset_nglob_cm(0:myrank-1))/), H5_COL)
-    !call write_array3dspec_as_1d_hdf5('reg1_veloc', offset_nspec_cm(myrank-1), offset_nglob_cm(myrank-1), &
-    !                                  tmp_data, sum(offset_nglob_cm(0:myrank-1)), ibool_crust_mantle)
-
-    deallocate(tmp_data)
   endif
 
   if (OUTPUT_OUTER_CORE) then
-    ! outer core
-    allocate(tmp_data(NGLOB_OUTER_CORE),stat=ier)
-    if (ier /= 0 ) call exit_MPI(myrank,'Error allocating temporary array tmp_data')
+    allocate(tmp_data_oc(NGLOB_OUTER_CORE),stat=ier)
+    if (ier /= 0) call exit_MPI(myrank,'Error allocating tmp_data_oc')
 
     do ispec = 1, NSPEC_OUTER_CORE
       do k = 1, NGLLZ
         do j = 1, NGLLY
           do i = 1, NGLLX
             iglob = ibool_outer_core(i,j,k,ispec)
-            ! norm of velocity
-            ! note: this outputs only the first time derivative of the potential,
-            !          not the actual velocity v = grad(Chi_dot)
-            tmp_data(iglob) = abs(veloc_outer_core(iglob))
+            ! note: this outputs only the first time derivative of the potential
+            tmp_data_oc(iglob) = abs(veloc_outer_core(iglob))
           enddo
         enddo
       enddo
     enddo
-    call h5_write_dataset_collect_hyperslab_in_group('reg2_veloc', tmp_data, &
-                                           (/sum(offset_nglob_oc(0:myrank-1))/), H5_COL)
-    !call write_array3dspec_as_1d_hdf5('reg2_veloc', offset_nspec_oc(myrank-1), offset_nglob_oc(myrank-1), &
-    !                                  tmp_data, sum(offset_nglob_oc(0:myrank-1)), ibool_outer_core)
-
-    deallocate(tmp_data)
   endif
 
   if (OUTPUT_INNER_CORE) then
-    ! inner core
-    allocate(tmp_data(NGLOB_INNER_CORE),stat=ier)
-    if (ier /= 0 ) call exit_MPI(myrank,'Error allocating temporary array tmp_data')
+    allocate(tmp_data_ic(NGLOB_INNER_CORE),stat=ier)
+    if (ier /= 0) call exit_MPI(myrank,'Error allocating tmp_data_ic')
 
     do ispec = 1, NSPEC_INNER_CORE
       do k = 1, NGLLZ
         do j = 1, NGLLY
           do i = 1, NGLLX
             iglob = ibool_inner_core(i,j,k,ispec)
-            ! norm of velocity
-            tmp_data(iglob) = real(scale_veloc,kind=CUSTOM_REAL) * sqrt( veloc_inner_core(1,iglob)**2 &
-                                                                       + veloc_inner_core(2,iglob)**2 &
-                                                                       + veloc_inner_core(3,iglob)**2 )
+            tmp_data_ic(iglob) = real(scale_veloc,kind=CUSTOM_REAL) * sqrt( veloc_inner_core(1,iglob)**2 &
+                                                                          + veloc_inner_core(2,iglob)**2 &
+                                                                          + veloc_inner_core(3,iglob)**2 )
           enddo
         enddo
       enddo
     enddo
-    ! TODO: no need to 3d to 1d conversion as the data is already 1d
-    call h5_write_dataset_collect_hyperslab_in_group('reg3_veloc', tmp_data, &
-                                           (/sum(offset_nglob_ic(0:myrank-1))/), H5_COL)
-    !call write_array3dspec_as_1d_hdf5('reg3_veloc', offset_nspec_ic(myrank-1), offset_nglob_ic(myrank-1), &
-    !                                  tmp_data, sum(offset_nglob_ic(0:myrank-1)), ibool_inner_core)
-
-    deallocate(tmp_data)
   endif
 
-  call h5_close_group()
-  call h5_close_file_p()
+  ! use IO server when dedicated HDF5 IO nodes are enabled
+  if (HDF5_IO_NODES > 0) then
+
+    ! send norm data to IO server for each region
+    n_req_vol = 0
+
+    if (OUTPUT_CRUST_MANTLE) then
+      n_req_vol = n_req_vol + 1
+      call isend_cr_inter(tmp_data_cm(1:NGLOB_CRUST_MANTLE), NGLOB_CRUST_MANTLE, dest_ionod, &
+                          io_tag_vol_norm_cm, req_dump_vol(n_req_vol))
+    endif
+
+    if (OUTPUT_OUTER_CORE) then
+      n_req_vol = n_req_vol + 1
+      call isend_cr_inter(tmp_data_oc(1:NGLOB_OUTER_CORE), NGLOB_OUTER_CORE, dest_ionod, &
+                          io_tag_vol_norm_oc, req_dump_vol(n_req_vol))
+    endif
+
+    if (OUTPUT_INNER_CORE) then
+      n_req_vol = n_req_vol + 1
+      call isend_cr_inter(tmp_data_ic(1:NGLOB_INNER_CORE), NGLOB_INNER_CORE, dest_ionod, &
+                          io_tag_vol_norm_ic, req_dump_vol(n_req_vol))
+    endif
+
+    ! wait for all sends to complete before returning to time loop
+    call wait_all_send()
+
+  else
+
+    ! direct HDF5 parallel I/O mode
+    call world_get_comm(comm)
+    call world_get_info_null(info)
+    call h5_initialize()
+    call h5_set_mpi_info(comm, info, myrank, NPROCTOT_VAL)
+
+    file_name = trim(OUTPUT_FILES) // '/movie_volume.h5'
+    group_name = 'it_' // trim(i2c(it))
+
+    ! create group and datasets
+    if (myrank == 0) then
+      call h5_open_file(file_name)
+      call h5_open_or_create_group(group_name)
+
+      if (OUTPUT_CRUST_MANTLE) then
+        call h5_create_dataset_gen_in_group('reg1_veloc', (/npoints_vol_mov_all_proc_cm/), 1, CUSTOM_REAL)
+      endif
+      if (OUTPUT_OUTER_CORE) then
+        call h5_create_dataset_gen_in_group('reg2_veloc', (/npoints_vol_mov_all_proc_oc/), 1, CUSTOM_REAL)
+      endif
+      if (OUTPUT_INNER_CORE) then
+        call h5_create_dataset_gen_in_group('reg3_veloc', (/npoints_vol_mov_all_proc_ic/), 1, CUSTOM_REAL)
+      endif
+
+      call h5_close_group()
+      call h5_close_file()
+    endif
+
+    call synchronize_all()
+
+    if (H5_COL) then
+      call h5_open_file_p_collect(file_name)
+    else
+      call h5_open_file_p(file_name)
+    endif
+    call h5_open_group(group_name)
+
+    if (OUTPUT_CRUST_MANTLE) then
+      call h5_write_dataset_collect_hyperslab_in_group('reg1_veloc', tmp_data_cm, &
+                                                     (/sum(offset_nglob_cm(0:myrank-1))/), H5_COL)
+    endif
+
+    if (OUTPUT_OUTER_CORE) then
+      call h5_write_dataset_collect_hyperslab_in_group('reg2_veloc', tmp_data_oc, &
+                                             (/sum(offset_nglob_oc(0:myrank-1))/), H5_COL)
+    endif
+
+    if (OUTPUT_INNER_CORE) then
+      call h5_write_dataset_collect_hyperslab_in_group('reg3_veloc', tmp_data_ic, &
+                                             (/sum(offset_nglob_ic(0:myrank-1))/), H5_COL)
+    endif
+
+    call h5_close_group()
+    call h5_close_file_p()
+
+  endif
+
+  ! deallocate temporary arrays
+  if (allocated(tmp_data_cm)) deallocate(tmp_data_cm)
+  if (allocated(tmp_data_oc)) deallocate(tmp_data_oc)
+  if (allocated(tmp_data_ic)) deallocate(tmp_data_ic)
 
 #else
   ! no HDF5 support
@@ -1554,14 +1621,16 @@
   subroutine write_movie_volume_accelnorm_hdf5(accel_crust_mantle,accel_inner_core,accel_outer_core, &
                                          ibool_crust_mantle,ibool_inner_core,ibool_outer_core)
 
-! outputs norm of acceleration: MOVIE_VOLUME_TYPE == 1
+! outputs norm of acceleration: MOVIE_VOLUME_TYPE == 9
 
   use constants_solver
 
 #ifdef USE_HDF5
-  use shared_parameters, only: OUTPUT_FILES
+  use shared_parameters, only: OUTPUT_FILES,HDF5_IO_NODES
   use specfem_par, only: it, scale_t_inv,scale_veloc, H5_COL
   use specfem_par_movie_hdf5
+  use io_server_hdf5, only: io_tag_vol_norm_cm, io_tag_vol_norm_oc, io_tag_vol_norm_ic, &
+                            dest_ionod, n_req_vol, req_dump_vol, wait_all_send
 #endif
 
   implicit none
@@ -1577,139 +1646,158 @@
 #ifdef USE_HDF5
   ! local parameters
   integer :: ispec,iglob,i,j,k,ier
-  real(kind=CUSTOM_REAL), dimension(:), allocatable :: tmp_data
+  real(kind=CUSTOM_REAL), dimension(:), allocatable :: tmp_data_cm
+  real(kind=CUSTOM_REAL), dimension(:), allocatable :: tmp_data_oc
+  real(kind=CUSTOM_REAL), dimension(:), allocatable :: tmp_data_ic
   real(kind=CUSTOM_REAL) :: scale_accel
 
   ! dimensionalized scaling
   scale_accel = real(scale_veloc * scale_t_inv,kind=CUSTOM_REAL)
 
-  ! initialize h5 file for volume movie
-  call world_get_comm(comm)
-  call world_get_info_null(info)
-  call h5_initialize()
-  call h5_set_mpi_info(comm, info, myrank, NPROCTOT_VAL)
-
-  file_name = trim(OUTPUT_FILES) // '/movie_volume.h5'
-  group_name = 'it_' // trim(i2c(it))
-
-  ! create group and datasets
-  if (myrank == 0) then
-    call h5_open_file(file_name)
-    call h5_open_or_create_group(group_name)
-
-    if (OUTPUT_CRUST_MANTLE) then
-      call h5_create_dataset_gen_in_group('reg1_accel', (/npoints_vol_mov_all_proc_cm/), 1, CUSTOM_REAL)
-    endif
-    if (OUTPUT_OUTER_CORE) then
-      call h5_create_dataset_gen_in_group('reg2_accel', (/npoints_vol_mov_all_proc_oc/), 1, CUSTOM_REAL)
-    endif
-    if (OUTPUT_INNER_CORE) then
-      call h5_create_dataset_gen_in_group('reg3_accel', (/npoints_vol_mov_all_proc_ic/), 1, CUSTOM_REAL)
-    endif
-
-    call h5_close_group()
-    call h5_close_file()
-  endif
-
-  call synchronize_all()
-
-  ! write the data
-  if (H5_COL) then
-    ! open file
-    call h5_open_file_p_collect(file_name)
-  else
-    ! open file
-    call h5_open_file_p(file_name)
-  endif
-  call h5_open_group(group_name)
-
-  ! outputs norm of acceleration
+  ! compute norm of acceleration for each region
   if (OUTPUT_CRUST_MANTLE) then
-    ! acceleration
-    ! these binary arrays can be converted into mesh format using the utility ./bin/xcombine_vol_data
-    allocate(tmp_data(NGLOB_CRUST_MANTLE),stat=ier)
-    if (ier /= 0 ) call exit_MPI(myrank,'Error allocating temporary array tmp_data')
+    allocate(tmp_data_cm(NGLOB_CRUST_MANTLE),stat=ier)
+    if (ier /= 0) call exit_MPI(myrank,'Error allocating tmp_data_cm')
 
     do ispec = 1, NSPEC_CRUST_MANTLE
       do k = 1, NGLLZ
         do j = 1, NGLLY
           do i = 1, NGLLX
             iglob = ibool_crust_mantle(i,j,k,ispec)
-            ! norm
-            tmp_data(iglob) = scale_accel * sqrt( accel_crust_mantle(1,iglob)**2 &
-                                                + accel_crust_mantle(2,iglob)**2 &
-                                                + accel_crust_mantle(3,iglob)**2 )
+            tmp_data_cm(iglob) = scale_accel * sqrt( accel_crust_mantle(1,iglob)**2 &
+                                                   + accel_crust_mantle(2,iglob)**2 &
+                                                   + accel_crust_mantle(3,iglob)**2 )
           enddo
         enddo
       enddo
     enddo
-
-     ! TODO: no need to 3d to 1d conversion as the data is already 1d
-    call h5_write_dataset_collect_hyperslab_in_group('reg1_accel', tmp_data, &
-                                                   (/sum(offset_nglob_cm(0:myrank-1))/), H5_COL)
-    !call write_array3dspec_as_1d_hdf5('reg1_accel', offset_nspec_cm(myrank-1), offset_nglob_cm(myrank-1), &
-    !                                  tmp_data, sum(offset_nglob_cm(0:myrank-1)), ibool_crust_mantle)
-
-    deallocate(tmp_data)
   endif
 
   if (OUTPUT_OUTER_CORE) then
-    ! outer core acceleration
-    allocate(tmp_data(NGLOB_OUTER_CORE),stat=ier)
-    if (ier /= 0 ) call exit_MPI(myrank,'Error allocating temporary array tmp_data')
+    allocate(tmp_data_oc(NGLOB_OUTER_CORE),stat=ier)
+    if (ier /= 0) call exit_MPI(myrank,'Error allocating tmp_data_oc')
 
     do ispec = 1, NSPEC_OUTER_CORE
       do k = 1, NGLLZ
         do j = 1, NGLLY
           do i = 1, NGLLX
             iglob = ibool_outer_core(i,j,k,ispec)
-            ! norm
-            ! note: this outputs only the second time derivative of the potential,
-            !          not the actual acceleration or pressure p = - rho * Chi_dot_dot
-            tmp_data(iglob) = abs(accel_outer_core(iglob))
+            ! note: this outputs only the second time derivative of the potential
+            tmp_data_oc(iglob) = abs(accel_outer_core(iglob))
           enddo
         enddo
       enddo
     enddo
-
-    ! TODO: no need to 3d to 1d conversion as the data is already 1d
-    call h5_write_dataset_collect_hyperslab_in_group('reg2_accel', tmp_data, &
-                                           (/sum(offset_nglob_oc(0:myrank-1))/), H5_COL)
-    !call write_array3dspec_as_1d_hdf5('reg2_accel', offset_nspec_oc(myrank-1), offset_nglob_oc(myrank-1), &
-    !                                  tmp_data, sum(offset_nglob_oc(0:myrank-1)), ibool_outer_core)
-
-    deallocate(tmp_data)
   endif
 
   if (OUTPUT_INNER_CORE) then
-    ! inner core
-    allocate(tmp_data(NGLOB_INNER_CORE),stat=ier)
-    if (ier /= 0 ) call exit_MPI(myrank,'Error allocating temporary array tmp_data')
+    allocate(tmp_data_ic(NGLOB_INNER_CORE),stat=ier)
+    if (ier /= 0) call exit_MPI(myrank,'Error allocating tmp_data_ic')
 
     do ispec = 1, NSPEC_INNER_CORE
       do k = 1, NGLLZ
         do j = 1, NGLLY
           do i = 1, NGLLX
             iglob = ibool_inner_core(i,j,k,ispec)
-            ! norm of acceleration
-            tmp_data(iglob) = scale_accel * sqrt( accel_inner_core(1,iglob)**2 &
-                                                + accel_inner_core(2,iglob)**2 &
-                                                + accel_inner_core(3,iglob)**2 )
+            tmp_data_ic(iglob) = scale_accel * sqrt( accel_inner_core(1,iglob)**2 &
+                                                   + accel_inner_core(2,iglob)**2 &
+                                                   + accel_inner_core(3,iglob)**2 )
           enddo
         enddo
       enddo
     enddo
-    ! TODO: no need to 3d to 1d conversion as the data is already 1d
-    call h5_write_dataset_collect_hyperslab_in_group('reg3_accel', tmp_data, &
-                                           (/sum(offset_nglob_ic(0:myrank-1))/), H5_COL)
-    !call write_array3dspec_as_1d_hdf5('reg3_accel', offset_nspec_ic(myrank-1), offset_nglob_ic(myrank-1), &
-    !                                  tmp_data, sum(offset_nglob_ic(0:myrank-1)), ibool_inner_core)
-
-    deallocate(tmp_data)
   endif
 
-  call h5_close_group()
-  call h5_close_file_p()
+  ! use IO server when dedicated HDF5 IO nodes are enabled
+  if (HDF5_IO_NODES > 0) then
+
+    ! send norm data to IO server for each region
+    n_req_vol = 0
+
+    if (OUTPUT_CRUST_MANTLE) then
+      n_req_vol = n_req_vol + 1
+      call isend_cr_inter(tmp_data_cm(1:NGLOB_CRUST_MANTLE), NGLOB_CRUST_MANTLE, dest_ionod, &
+                          io_tag_vol_norm_cm, req_dump_vol(n_req_vol))
+    endif
+
+    if (OUTPUT_OUTER_CORE) then
+      n_req_vol = n_req_vol + 1
+      call isend_cr_inter(tmp_data_oc(1:NGLOB_OUTER_CORE), NGLOB_OUTER_CORE, dest_ionod, &
+                          io_tag_vol_norm_oc, req_dump_vol(n_req_vol))
+    endif
+
+    if (OUTPUT_INNER_CORE) then
+      n_req_vol = n_req_vol + 1
+      call isend_cr_inter(tmp_data_ic(1:NGLOB_INNER_CORE), NGLOB_INNER_CORE, dest_ionod, &
+                          io_tag_vol_norm_ic, req_dump_vol(n_req_vol))
+    endif
+
+    ! wait for all sends to complete before returning to time loop
+    call wait_all_send()
+
+  else
+
+    ! direct HDF5 parallel I/O mode
+    call world_get_comm(comm)
+    call world_get_info_null(info)
+    call h5_initialize()
+    call h5_set_mpi_info(comm, info, myrank, NPROCTOT_VAL)
+
+    file_name = trim(OUTPUT_FILES) // '/movie_volume.h5'
+    group_name = 'it_' // trim(i2c(it))
+
+    ! create group and datasets
+    if (myrank == 0) then
+      call h5_open_file(file_name)
+      call h5_open_or_create_group(group_name)
+
+      if (OUTPUT_CRUST_MANTLE) then
+        call h5_create_dataset_gen_in_group('reg1_accel', (/npoints_vol_mov_all_proc_cm/), 1, CUSTOM_REAL)
+      endif
+      if (OUTPUT_OUTER_CORE) then
+        call h5_create_dataset_gen_in_group('reg2_accel', (/npoints_vol_mov_all_proc_oc/), 1, CUSTOM_REAL)
+      endif
+      if (OUTPUT_INNER_CORE) then
+        call h5_create_dataset_gen_in_group('reg3_accel', (/npoints_vol_mov_all_proc_ic/), 1, CUSTOM_REAL)
+      endif
+
+      call h5_close_group()
+      call h5_close_file()
+    endif
+
+    call synchronize_all()
+
+    if (H5_COL) then
+      call h5_open_file_p_collect(file_name)
+    else
+      call h5_open_file_p(file_name)
+    endif
+    call h5_open_group(group_name)
+
+    if (OUTPUT_CRUST_MANTLE) then
+      call h5_write_dataset_collect_hyperslab_in_group('reg1_accel', tmp_data_cm, &
+                                                     (/sum(offset_nglob_cm(0:myrank-1))/), H5_COL)
+    endif
+
+    if (OUTPUT_OUTER_CORE) then
+      call h5_write_dataset_collect_hyperslab_in_group('reg2_accel', tmp_data_oc, &
+                                             (/sum(offset_nglob_oc(0:myrank-1))/), H5_COL)
+    endif
+
+    if (OUTPUT_INNER_CORE) then
+      call h5_write_dataset_collect_hyperslab_in_group('reg3_accel', tmp_data_ic, &
+                                             (/sum(offset_nglob_ic(0:myrank-1))/), H5_COL)
+    endif
+
+    call h5_close_group()
+    call h5_close_file_p()
+
+  endif
+
+  ! deallocate temporary arrays
+  if (allocated(tmp_data_cm)) deallocate(tmp_data_cm)
+  if (allocated(tmp_data_oc)) deallocate(tmp_data_oc)
+  if (allocated(tmp_data_ic)) deallocate(tmp_data_ic)
 
 #else
   ! no HDF5 support
@@ -1953,7 +2041,24 @@
 !
 
   subroutine write_xdmf_vol_hdf5_header(nelems, nglobs, fname_h5_data_vol_xdmf, target_unit, region_flag)
-
+  !
+  ! Writes XDMF header section for volume movie output.
+  !
+  ! Parameters:
+  !   nelems             - Number of elements in the mesh
+  !   nglobs             - Number of global points (nodes) in the mesh
+  !   fname_h5_data_vol_xdmf - Path to HDF5 data file (relative to XDMF file)
+  !   target_unit        - Fortran unit number for the output XDMF file
+  !   region_flag        - Specifies which Earth region / mesh subset:
+  !                        1 = Full strain/vector output (generic mesh: elm_conn, x, y, z)
+  !                        2 = Crust-mantle region (elm_conn_cm, x_cm, y_cm, z_cm)
+  !                        3 = Outer core region (elm_conn_oc, x_oc, y_oc, z_oc)
+  !                        4 = Inner core region (elm_conn_ic, x_ic, y_ic, z_ic)
+  !
+  ! The region_flag determines which HDF5 dataset names are used in the XDMF file.
+  ! This allows separate XDMF files for different Earth regions while sharing
+  ! the same HDF5 data file.
+  !
     use specfem_par
     use specfem_par_movie_hdf5
 
@@ -1962,34 +2067,41 @@
     integer, intent(in) :: nelems, nglobs
     character(len=*), intent(in) :: fname_h5_data_vol_xdmf
     integer, intent(in) :: target_unit
-    integer, intent(in) :: region_flag ! 1: crust mantle, 2: outer core, 3: inner core
+    integer, intent(in) :: region_flag
 
     character(len=64) :: nelm_str, nglo_str, elemconn_str, x_str, y_str, z_str
 
-    if (region_flag == 1) then
+    ! Select HDF5 dataset names based on region_flag
+    select case (region_flag)
+    case (1)
+      ! Generic/full volume output
       elemconn_str = 'elm_conn'
       x_str = 'x'
       y_str = 'y'
       z_str = 'z'
-    else if (region_flag == 2) then
+    case (2)
+      ! Crust-mantle region
       elemconn_str = 'elm_conn_cm'
       x_str = 'x_cm'
       y_str = 'y_cm'
       z_str = 'z_cm'
-    else if (region_flag == 3) then
+    case (3)
+      ! Outer core region
       elemconn_str = 'elm_conn_oc'
       x_str = 'x_oc'
       y_str = 'y_oc'
       z_str = 'z_oc'
-    else if (region_flag == 4) then
+    case (4)
+      ! Inner core region
       elemconn_str = 'elm_conn_ic'
       x_str = 'x_ic'
       y_str = 'y_ic'
       z_str = 'z_ic'
-    else
-      print *,'Error: invalid region_flag in write_xdmf_vol_hdf5_header'
-      call exit_mpi(myrank,'Error invalid region_flag in write_xdmf_vol_hdf5_header')
-    endif
+    case default
+      print *, 'Error: invalid region_flag in write_xdmf_vol_hdf5_header:', region_flag
+      print *, '       Valid values: 1 (full), 2 (crust-mantle), 3 (outer core), 4 (inner core)'
+      call exit_mpi(myrank, 'Error invalid region_flag in write_xdmf_vol_hdf5_header')
+    end select
 
     ! convert integer to string
     nelm_str = i2c(nelems)
@@ -2066,7 +2178,7 @@
   integer, intent(in) :: npoints_3dmovie_ic, nelems_3dmovie_ic
 
   ! local parameters
-  integer                       :: i, ii
+  integer                       :: i, ii, ierr
   character(len=20)             :: it_str, movie_prefix
   character(len=MAX_STRING_LEN) :: fname_xdmf_vol, fname_xdmf_vol_oc, fname_xdmf_vol_ic
   character(len=MAX_STRING_LEN) :: fname_h5_data_vol_xdmf
@@ -2092,7 +2204,11 @@
     fname_h5_data_vol_xdmf = "./movie_volume.h5"  ! relative to movie_volume.xmf file
 
     ! open xdmf file
-    open(unit=xdmf_vol, file=trim(fname_xdmf_vol), recl=256)
+    open(unit=xdmf_vol, file=trim(fname_xdmf_vol), status='replace', action='write', iostat=ierr, recl=256)
+    if (ierr /= 0) then
+      print *, 'Error: could not open XDMF file ', trim(fname_xdmf_vol)
+      return
+    endif
 
     call write_xdmf_vol_hdf5_header(nspec_vol_mov_all_proc, npoints_vol_mov_all_proc, fname_h5_data_vol_xdmf, xdmf_vol, 1)
 
@@ -2159,7 +2275,7 @@
     call write_xdmf_vol_hdf5_footer(xdmf_vol)
 
     ! close xdmf file
-    close(xdmf_vol)
+    close(xdmf_vol, iostat=ierr)
 
   endif ! output_sv
 
@@ -2172,7 +2288,11 @@
     fname_h5_data_vol_xdmf = "./movie_volume.h5"  ! relative to movie_volume_cm.xmf file
 
     ! open xdmf file
-    open(unit=xdmf_vol, file=trim(fname_xdmf_vol), recl=256)
+    open(unit=xdmf_vol, file=trim(fname_xdmf_vol), status='replace', action='write', iostat=ierr, recl=256)
+    if (ierr /= 0) then
+      print *, 'Error: could not open XDMF file ', trim(fname_xdmf_vol)
+      return
+    endif
 
     call write_xdmf_vol_hdf5_header(nspec_vol_mov_all_proc_cm_conn, npoints_vol_mov_all_proc_cm, &
                                     fname_h5_data_vol_xdmf, xdmf_vol, 2)
@@ -2219,7 +2339,7 @@
     call write_xdmf_vol_hdf5_footer(xdmf_vol)
 
     ! close xdmf file
-    close(xdmf_vol)
+    close(xdmf_vol, iostat=ierr)
 
   endif ! output_cm
 
@@ -2232,7 +2352,11 @@
     fname_h5_data_vol_xdmf = "./movie_volume.h5"  ! relative to movie_volume_oc.xmf file
 
     ! open xdmf file
-    open(unit=xdmf_vol, file=trim(fname_xdmf_vol_oc), recl=256)
+    open(unit=xdmf_vol, file=trim(fname_xdmf_vol_oc), status='replace', action='write', iostat=ierr, recl=256)
+    if (ierr /= 0) then
+      print *, 'Error: could not open XDMF file ', trim(fname_xdmf_vol_oc)
+      return
+    endif
 
     call write_xdmf_vol_hdf5_header(nspec_vol_mov_all_proc_oc_conn, npoints_vol_mov_all_proc_oc, &
                                     fname_h5_data_vol_xdmf, xdmf_vol, 3)
@@ -2278,7 +2402,7 @@
     call write_xdmf_vol_hdf5_footer(xdmf_vol)
 
     ! close xdmf file
-    close(xdmf_vol)
+    close(xdmf_vol, iostat=ierr)
 
   endif ! output_oc
 
@@ -2291,7 +2415,11 @@
     fname_h5_data_vol_xdmf = "./movie_volume.h5"  ! relative to movie_volume_ic.xmf file
 
     ! open xdmf file
-    open(unit=xdmf_vol, file=trim(fname_xdmf_vol_ic), recl=256)
+    open(unit=xdmf_vol, file=trim(fname_xdmf_vol_ic), status='replace', action='write', iostat=ierr, recl=256)
+    if (ierr /= 0) then
+      print *, 'Error: could not open XDMF file ', trim(fname_xdmf_vol_ic)
+      return
+    endif
 
     call write_xdmf_vol_hdf5_header(nspec_vol_mov_all_proc_ic_conn, npoints_vol_mov_all_proc_ic, &
                                     fname_h5_data_vol_xdmf, xdmf_vol, 4)
@@ -2349,7 +2477,7 @@
     call write_xdmf_vol_hdf5_footer(xdmf_vol)
 
     ! close xdmf file
-    close(xdmf_vol)
+    close(xdmf_vol, iostat=ierr)
 
   endif ! output_ic
 
@@ -2386,7 +2514,7 @@
   integer, intent(in) :: npoints_3dmovie_ic, nelems_3dmovie_ic
 
   ! local parameters
-  integer                       :: i, ii, io_id
+  integer                       :: i, ii, io_id, ierr
   character(len=20)             :: it_str, movie_prefix, io_str
   character(len=MAX_STRING_LEN) :: fname_xdmf_vol, fname_xdmf_vol_oc, fname_xdmf_vol_ic
   character(len=MAX_STRING_LEN) :: fname_h5_geom, fname_h5_data
@@ -2413,7 +2541,11 @@
       fname_xdmf_vol = trim(OUTPUT_FILES) // "/movie_volume_io" // trim(io_str) // ".xmf"
 
       ! open xdmf file
-      open(unit=xdmf_vol, file=trim(fname_xdmf_vol), recl=256)
+      open(unit=xdmf_vol, file=trim(fname_xdmf_vol), status='replace', action='write', iostat=ierr, recl=256)
+      if (ierr /= 0) then
+        print *, 'Error: could not open XDMF file ', trim(fname_xdmf_vol)
+        cycle
+      endif
 
       call write_xdmf_vol_hdf5_header(nspec_vol_mov_all_proc, npoints_vol_mov_all_proc, &
                                       fname_h5_geom, xdmf_vol, 1)
@@ -2479,7 +2611,7 @@
       call write_xdmf_vol_hdf5_footer(xdmf_vol)
 
       ! close xdmf file
-      close(xdmf_vol)
+      close(xdmf_vol, iostat=ierr)
 
     endif ! output_sv
 
@@ -2491,7 +2623,11 @@
       fname_xdmf_vol = trim(OUTPUT_FILES) // '/movie_volume_cm_io' // trim(io_str) // '.xmf'
 
       ! open xdmf file
-      open(unit=xdmf_vol, file=trim(fname_xdmf_vol), recl=256)
+      open(unit=xdmf_vol, file=trim(fname_xdmf_vol), status='replace', action='write', iostat=ierr, recl=256)
+      if (ierr /= 0) then
+        print *, 'Error: could not open XDMF file ', trim(fname_xdmf_vol)
+        cycle
+      endif
 
       call write_xdmf_vol_hdf5_header(nspec_vol_mov_all_proc_cm_conn, npoints_vol_mov_all_proc_cm, &
                                       fname_h5_geom, xdmf_vol, 2)
@@ -2537,7 +2673,7 @@
       call write_xdmf_vol_hdf5_footer(xdmf_vol)
 
       ! close xdmf file
-      close(xdmf_vol)
+      close(xdmf_vol, iostat=ierr)
 
     endif ! output_cm
 
@@ -2549,7 +2685,11 @@
       fname_xdmf_vol_oc = trim(OUTPUT_FILES) // '/movie_volume_oc_io' // trim(io_str) // '.xmf'
 
       ! open xdmf file
-      open(unit=xdmf_vol, file=trim(fname_xdmf_vol_oc), recl=256)
+      open(unit=xdmf_vol, file=trim(fname_xdmf_vol_oc), status='replace', action='write', iostat=ierr, recl=256)
+      if (ierr /= 0) then
+        print *, 'Error: could not open XDMF file ', trim(fname_xdmf_vol_oc)
+        cycle
+      endif
 
       call write_xdmf_vol_hdf5_header(nspec_vol_mov_all_proc_oc_conn, npoints_vol_mov_all_proc_oc, &
                                       fname_h5_geom, xdmf_vol, 3)
@@ -2594,7 +2734,7 @@
       call write_xdmf_vol_hdf5_footer(xdmf_vol)
 
       ! close xdmf file
-      close(xdmf_vol)
+      close(xdmf_vol, iostat=ierr)
 
     endif ! output_oc
 
@@ -2606,7 +2746,11 @@
       fname_xdmf_vol_ic = trim(OUTPUT_FILES) // '/movie_volume_ic_io' // trim(io_str) // '.xmf'
 
       ! open xdmf file
-      open(unit=xdmf_vol, file=trim(fname_xdmf_vol_ic), recl=256)
+      open(unit=xdmf_vol, file=trim(fname_xdmf_vol_ic), status='replace', action='write', iostat=ierr, recl=256)
+      if (ierr /= 0) then
+        print *, 'Error: could not open XDMF file ', trim(fname_xdmf_vol_ic)
+        cycle
+      endif
 
       call write_xdmf_vol_hdf5_header(nspec_vol_mov_all_proc_ic_conn, npoints_vol_mov_all_proc_ic, &
                                       fname_h5_geom, xdmf_vol, 4)
@@ -2663,7 +2807,7 @@
       call write_xdmf_vol_hdf5_footer(xdmf_vol)
 
       ! close xdmf file
-      close(xdmf_vol)
+      close(xdmf_vol, iostat=ierr)
 
     endif ! output_ic
 

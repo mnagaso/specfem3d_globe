@@ -465,6 +465,7 @@ $O/finalize_simulation.solverstatic.o: $O/hdf5_io_server.solverstatic.o
 # ensure io_bandwidth module is available before compiling HDF5 I/O routines
 $O/hdf5_io_server.solverstatic.o: $O/io_tester.solverstatic.o
 $O/save_forward_arrays_hdf5.solverstatic.o: $O/io_tester.solverstatic.o
+$O/write_movie_volume_hdf5.solverstatic.o: $O/hdf5_io_server.solverstatic.o
 
 ###
 ### specfem3D - optimized flags and dependence on values from mesher here

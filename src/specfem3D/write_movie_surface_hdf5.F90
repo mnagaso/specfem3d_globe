@@ -252,8 +252,8 @@ subroutine write_movie_surface_mesh_hdf5()
       ! geometry in movie_surface.h5 and data in movie_surface.io<k>.h5
       call write_xdmf_surface_shards(npoints_surf_mov_all_proc)
     else
-      ! original single-file XDMF referencing movie_surface.h5
-      call write_xdmf_surface_header(npoints_surf_mov_all_proc)
+      ! single-file mode: complete XDMF referencing movie_surface.h5
+      call write_xdmf_surface_complete(npoints_surf_mov_all_proc)
     endif
   endif
 
@@ -412,9 +412,6 @@ subroutine write_movie_surface_hdf5()
     ! hdf5 i/o server request index for surface movie
     req_count = 1
 
-    ! wait for all previous send requests to finish
-    call wait_all_send()
-
     ! debug: log surface movie send on compute side
     print *, 'compute surf_send: it', it, 'rank', myrank, 'dest_ionod', dest_ionod, 'npoints', ipoin
 
@@ -431,6 +428,10 @@ subroutine write_movie_surface_hdf5()
 
     ! store number of MPI_ISEND requests for surface movie
     n_req_surf = req_count - 1
+
+    ! wait for current frame's sends to complete before returning to time loop
+    ! (prevents MPI resource conflict between inter-communicator and compute-only communicator)
+    call wait_all_send()
 
     ! in multi-IO mode, XDMF is generated once per shard by
     ! write_xdmf_surface_shards() and does not need per-step appends
@@ -486,8 +487,8 @@ subroutine write_movie_surface_hdf5()
     call h5_close_group()
     call h5_close_file_p()
 
-    ! write XDMF body only in single-file mode
-    call write_xdmf_surface_body(it, npoints_surf_mov_all_proc)
+    ! Note: XDMF file is written once at initialization (complete file approach)
+    ! so no per-timestep write_xdmf_surface_body call is needed
 
   endif
 
@@ -507,21 +508,39 @@ end subroutine write_movie_surface_hdf5
 !
 ! xdmf output routines
 !
+! The XDMF routines generate XML metadata files that describe the HDF5 data layout
+! for visualization software (ParaView, VisIt, etc.).
+!
+! For surface movies, there are two modes:
+!   - Single-file mode (HDF5_IO_NODES <= 1): writes movie_surface.xmf referencing movie_surface.h5
+!   - Multi-IO mode (HDF5_IO_NODES > 1): writes movie_surface_io<k>.xmf for each IO shard k
+!
+! Both modes now use complete file generation (not incremental appending) for robustness.
+!
 #ifdef USE_HDF5
 
-  subroutine write_xdmf_surface_header(num_nodes)
-
+  subroutine write_xdmf_surface_complete(num_nodes)
+  !
+  ! Writes a complete XDMF file for surface movie in single-file mode.
+  ! This replaces the old incremental approach (header + body) for robustness.
+  ! The file describes all time frames upfront based on simulation parameters.
+  !
   use specfem_par
   use specfem_par_movie_hdf5
 
   implicit none
   integer, intent(in) :: num_nodes
+
   ! local parameters
   integer :: num_elm
+  integer :: i_frame, max_surf_frames
+  integer :: it_first_surf, it_val
+  integer :: ierr
   character(len=MAX_STRING_LEN) :: fname_xdmf_surf
   character(len=MAX_STRING_LEN) :: fname_h5_data_surf_xdmf
+  character(len=32) :: it_str
 
-  ! checks if anything do, only main process writes out xdmf file
+  ! only main process writes out xdmf file
   if (myrank /= 0) return
 
   ! this routine is used only in single-file mode (no IO sharding)
@@ -533,43 +552,99 @@ end subroutine write_movie_surface_hdf5
 
   num_elm = num_nodes / 4
 
-  open(unit=xdmf_surf, file=trim(fname_xdmf_surf), recl=256)
+  ! determine number of surface movie frames from time-stepping parameters
+  max_surf_frames = 0
+  it_first_surf = 0
 
+  if (NTSTEP_BETWEEN_FRAMES > 0) then
+    it_first_surf = ((it_begin + NTSTEP_BETWEEN_FRAMES - 1)/NTSTEP_BETWEEN_FRAMES) * NTSTEP_BETWEEN_FRAMES
+    if (it_first_surf <= it_end) then
+      max_surf_frames = (it_end - it_first_surf) / NTSTEP_BETWEEN_FRAMES + 1
+    endif
+  endif
+
+  ! open file with error handling
+  open(unit=xdmf_surf, file=trim(fname_xdmf_surf), status='replace', &
+       action='write', iostat=ierr, recl=512)
+  if (ierr /= 0) then
+    print *, 'Error: cannot open XDMF file for surface movie: ', trim(fname_xdmf_surf)
+    call exit_mpi(myrank, 'Error opening surface movie XDMF file')
+  endif
+
+  ! Write XDMF header
   write(xdmf_surf,'(a)') '<?xml version="1.0" ?>'
-  write(xdmf_surf,*) '<!DOCTYPE Xdmf SYSTEM "Xdmf.dtd" []>'
-  write(xdmf_surf,*) '<Xdmf Version="3.0">'
-  write(xdmf_surf,*) '<Domain Name="mesh">'
-  write(xdmf_surf,*) '<Topology Name="topo" TopologyType="Quadrilateral" NumberOfElements="'//trim(i2c(num_elm))//'"/>'
-  write(xdmf_surf,*) '<Geometry GeometryType="X_Y_Z">'
-  write(xdmf_surf,*) '<DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="' &
-                                                        //trim(i2c(CUSTOM_REAL))//'" Dimensions="'//trim(i2c(num_nodes))//'">'
-  write(xdmf_surf,*) '        '//trim(fname_h5_data_surf_xdmf)//':/surf_coord/x'
-  write(xdmf_surf,*) '</DataItem>'
-  write(xdmf_surf,*) '<DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="'&
-                                                        //trim(i2c(CUSTOM_REAL))//'" Dimensions="'//trim(i2c(num_nodes))//'">'
-  write(xdmf_surf,*) '        '//trim(fname_h5_data_surf_xdmf)//':/surf_coord/y'
-  write(xdmf_surf,*) '</DataItem>'
-  write(xdmf_surf,*) '<DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="'&
-                                                       //trim(i2c(CUSTOM_REAL))//'" Dimensions="'//trim(i2c(num_nodes))//'">'
-  write(xdmf_surf,*) '        '//trim(fname_h5_data_surf_xdmf)//':/surf_coord/z'
-  write(xdmf_surf,*) '</DataItem>'
-  write(xdmf_surf,*) '</Geometry>'
+  write(xdmf_surf,'(a)') '<!DOCTYPE Xdmf SYSTEM "Xdmf.dtd" []>'
+  write(xdmf_surf,'(a)') '<Xdmf Version="3.0">'
+  write(xdmf_surf,'(a)') '<Domain Name="mesh">'
 
-  write(xdmf_surf,*) '<Grid Name="fensap" GridType="Collection" CollectionType="Temporal">'
-  ! 17 lines
+  ! Define shared topology and geometry (referenced by all time grids)
+  write(xdmf_surf,'(a)') '<Topology Name="topo" TopologyType="Quadrilateral" NumberOfElements="'//trim(i2c(num_elm))//'"/>'
+  write(xdmf_surf,'(a)') '<Geometry Name="geom" GeometryType="X_Y_Z">'
+  write(xdmf_surf,'(a)') '  <DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="' &
+                         //trim(i2c(CUSTOM_REAL))//'" Dimensions="'//trim(i2c(num_nodes))//'">'
+  write(xdmf_surf,'(a)') '    '//trim(fname_h5_data_surf_xdmf)//':/surf_coord/x'
+  write(xdmf_surf,'(a)') '  </DataItem>'
+  write(xdmf_surf,'(a)') '  <DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="' &
+                         //trim(i2c(CUSTOM_REAL))//'" Dimensions="'//trim(i2c(num_nodes))//'">'
+  write(xdmf_surf,'(a)') '    '//trim(fname_h5_data_surf_xdmf)//':/surf_coord/y'
+  write(xdmf_surf,'(a)') '  </DataItem>'
+  write(xdmf_surf,'(a)') '  <DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="' &
+                         //trim(i2c(CUSTOM_REAL))//'" Dimensions="'//trim(i2c(num_nodes))//'">'
+  write(xdmf_surf,'(a)') '    '//trim(fname_h5_data_surf_xdmf)//':/surf_coord/z'
+  write(xdmf_surf,'(a)') '  </DataItem>'
+  write(xdmf_surf,'(a)') '</Geometry>'
 
-  ! file finish
-  write(xdmf_surf,*) '</Grid>'
-  write(xdmf_surf,*) '</Domain>'
-  write(xdmf_surf,*) '</Xdmf>'
-  ! 20 lines
+  ! Temporal collection grid
+  write(xdmf_surf,'(a)') '<Grid Name="SurfaceMovie" GridType="Collection" CollectionType="Temporal">'
 
-  ! position where the additional data will be inserted
-  surf_xdmf_pos = 17
+  ! Write all time frames
+  do i_frame = 0, max_surf_frames - 1
+    it_val = it_first_surf + i_frame * NTSTEP_BETWEEN_FRAMES
+    it_str = i2c(it_val)
 
-  close(xdmf_surf)
+    write(xdmf_surf,'(a)') '  <Grid Name="it_'//trim(it_str)//'" GridType="Uniform">'
+    write(xdmf_surf,'(a)') '    <Time Value="'//trim(r2c(sngl((it_val-1)*DT-t0)))//'" />'
+    write(xdmf_surf,'(a)') '    <Topology Reference="/Xdmf/Domain/Topology" />'
+    write(xdmf_surf,'(a)') '    <Geometry Reference="/Xdmf/Domain/Geometry" />'
 
-  end subroutine write_xdmf_surface_header
+    ! ux attribute
+    write(xdmf_surf,'(a)') '    <Attribute Name="ux" AttributeType="Scalar" Center="Node">'
+    write(xdmf_surf,'(a)') '      <DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="' &
+                           //trim(i2c(CUSTOM_REAL))//'" Dimensions="'//trim(i2c(num_nodes))//'">'
+    write(xdmf_surf,'(a)') '        '//trim(fname_h5_data_surf_xdmf)//':/it_'//trim(it_str)//'/ux'
+    write(xdmf_surf,'(a)') '      </DataItem>'
+    write(xdmf_surf,'(a)') '    </Attribute>'
+
+    ! uy attribute
+    write(xdmf_surf,'(a)') '    <Attribute Name="uy" AttributeType="Scalar" Center="Node">'
+    write(xdmf_surf,'(a)') '      <DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="' &
+                           //trim(i2c(CUSTOM_REAL))//'" Dimensions="'//trim(i2c(num_nodes))//'">'
+    write(xdmf_surf,'(a)') '        '//trim(fname_h5_data_surf_xdmf)//':/it_'//trim(it_str)//'/uy'
+    write(xdmf_surf,'(a)') '      </DataItem>'
+    write(xdmf_surf,'(a)') '    </Attribute>'
+
+    ! uz attribute
+    write(xdmf_surf,'(a)') '    <Attribute Name="uz" AttributeType="Scalar" Center="Node">'
+    write(xdmf_surf,'(a)') '      <DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="' &
+                           //trim(i2c(CUSTOM_REAL))//'" Dimensions="'//trim(i2c(num_nodes))//'">'
+    write(xdmf_surf,'(a)') '        '//trim(fname_h5_data_surf_xdmf)//':/it_'//trim(it_str)//'/uz'
+    write(xdmf_surf,'(a)') '      </DataItem>'
+    write(xdmf_surf,'(a)') '    </Attribute>'
+
+    write(xdmf_surf,'(a)') '  </Grid>'
+  enddo
+
+  ! Close temporal collection and document
+  write(xdmf_surf,'(a)') '</Grid>'
+  write(xdmf_surf,'(a)') '</Domain>'
+  write(xdmf_surf,'(a)') '</Xdmf>'
+
+  close(xdmf_surf, iostat=ierr)
+  if (ierr /= 0) then
+    print *, 'Warning: error closing XDMF file for surface movie'
+  endif
+
+  end subroutine write_xdmf_surface_complete
 
 #endif
 
@@ -577,6 +652,12 @@ end subroutine write_movie_surface_hdf5
 #ifdef USE_HDF5
 
   subroutine write_xdmf_surface_shards(num_nodes)
+  !
+  ! Writes complete XDMF files for surface movie in multi-IO mode.
+  ! Creates one XDMF file per IO shard, each referencing:
+  !   - Shared geometry from movie_surface.h5
+  !   - Data from movie_surface.io<k>.h5 for shard k
+  !
 
   use specfem_par
   use specfem_par_movie_hdf5
@@ -589,6 +670,7 @@ end subroutine write_movie_surface_hdf5
   integer :: io_id
   integer :: i_frame, max_surf_frames
   integer :: it_first_surf, it_val
+  integer :: ierr
   character(len=MAX_STRING_LEN) :: fname_xdmf_surf
   character(len=MAX_STRING_LEN) :: fname_h5_geom
   character(len=MAX_STRING_LEN) :: fname_h5_data
@@ -619,66 +701,76 @@ end subroutine write_movie_surface_hdf5
     fname_xdmf_surf = trim(OUTPUT_FILES)//"/movie_surface_io"//trim(i2c(io_id))//".xmf"
     fname_h5_data   = "./movie_surface.io"//trim(i2c(io_id))//".h5"
 
-    open(unit=xdmf_surf, file=trim(fname_xdmf_surf), recl=256)
+    ! open file with error handling
+    open(unit=xdmf_surf, file=trim(fname_xdmf_surf), status='replace', &
+         action='write', iostat=ierr, recl=512)
+    if (ierr /= 0) then
+      print *, 'Error: cannot open XDMF file for surface movie shard: ', trim(fname_xdmf_surf)
+      call exit_mpi(myrank, 'Error opening surface movie XDMF shard file')
+    endif
 
     write(xdmf_surf,'(a)') '<?xml version="1.0" ?>'
-    write(xdmf_surf,*) '<!DOCTYPE Xdmf SYSTEM "Xdmf.dtd" []>'
-    write(xdmf_surf,*) '<Xdmf Version="3.0">'
-    write(xdmf_surf,*) '<Domain>'
-    write(xdmf_surf,*) '<Grid Name="SurfaceMovie" GridType="Collection" CollectionType="Temporal">'
+    write(xdmf_surf,'(a)') '<!DOCTYPE Xdmf SYSTEM "Xdmf.dtd" []>'
+    write(xdmf_surf,'(a)') '<Xdmf Version="3.0">'
+    write(xdmf_surf,'(a)') '<Domain>'
+    write(xdmf_surf,'(a)') '<Grid Name="SurfaceMovie" GridType="Collection" CollectionType="Temporal">'
 
     do i_frame = 0, max_surf_frames-1
 
       it_val = it_first_surf + i_frame * NTSTEP_BETWEEN_FRAMES
       it_str = i2c(it_val)
 
-      write(xdmf_surf,*) '<Grid Name="it_'//trim(it_str)//'" GridType="Uniform">'
-      write(xdmf_surf,*) '<Time Value="'//trim(r2c(sngl((it_val-1)*DT-t0)))//'" />'
+      write(xdmf_surf,'(a)') '  <Grid Name="it_'//trim(it_str)//'" GridType="Uniform">'
+      write(xdmf_surf,'(a)') '    <Time Value="'//trim(r2c(sngl((it_val-1)*DT-t0)))//'" />'
 
-      write(xdmf_surf,*) '<Topology TopologyType="Polyvertex" NumberOfElements="'//trim(i2c(num_nodes))//'"/>'
+      write(xdmf_surf,'(a)') '    <Topology TopologyType="Polyvertex" NumberOfElements="'//trim(i2c(num_nodes))//'"/>'
 
-      write(xdmf_surf,*) '<Geometry GeometryType="XYZ">'
-      write(xdmf_surf,*) '  <DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="'//trim(i2c(CUSTOM_REAL))// &
-                         '" Dimensions="'//trim(i2c(num_nodes))//'">'
-      write(xdmf_surf,*) '    '//trim(fname_h5_geom)//':/surf_coord/x'
-      write(xdmf_surf,*) '  </DataItem>'
-      write(xdmf_surf,*) '  <DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="'//trim(i2c(CUSTOM_REAL))// &
-                         '" Dimensions="'//trim(i2c(num_nodes))//'">'
-      write(xdmf_surf,*) '    '//trim(fname_h5_geom)//':/surf_coord/y'
-      write(xdmf_surf,*) '  </DataItem>'
-      write(xdmf_surf,*) '  <DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="'//trim(i2c(CUSTOM_REAL))// &
-                         '" Dimensions="'//trim(i2c(num_nodes))//'">'
-      write(xdmf_surf,*) '    '//trim(fname_h5_geom)//':/surf_coord/z'
-      write(xdmf_surf,*) '  </DataItem>'
-      write(xdmf_surf,*) '</Geometry>'
+      ! Note: GeometryType X_Y_Z expects separate x, y, z arrays (not interleaved XYZ)
+      write(xdmf_surf,'(a)') '    <Geometry GeometryType="X_Y_Z">'
+      write(xdmf_surf,'(a)') '      <DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="' &
+                             //trim(i2c(CUSTOM_REAL))//'" Dimensions="'//trim(i2c(num_nodes))//'">'
+      write(xdmf_surf,'(a)') '        '//trim(fname_h5_geom)//':/surf_coord/x'
+      write(xdmf_surf,'(a)') '      </DataItem>'
+      write(xdmf_surf,'(a)') '      <DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="' &
+                             //trim(i2c(CUSTOM_REAL))//'" Dimensions="'//trim(i2c(num_nodes))//'">'
+      write(xdmf_surf,'(a)') '        '//trim(fname_h5_geom)//':/surf_coord/y'
+      write(xdmf_surf,'(a)') '      </DataItem>'
+      write(xdmf_surf,'(a)') '      <DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="' &
+                             //trim(i2c(CUSTOM_REAL))//'" Dimensions="'//trim(i2c(num_nodes))//'">'
+      write(xdmf_surf,'(a)') '        '//trim(fname_h5_geom)//':/surf_coord/z'
+      write(xdmf_surf,'(a)') '      </DataItem>'
+      write(xdmf_surf,'(a)') '    </Geometry>'
 
-      write(xdmf_surf,*) '<Attribute Name="velocity" AttributeType="Vector" Center="Node">'
-      write(xdmf_surf,*) '  <DataItem ItemType="Function" Function="JOIN($0,$1,$2)" Dimensions="'//trim(i2c(num_nodes))// &
-                         ' 3">'
-      write(xdmf_surf,*) '    <DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="'//trim(i2c(CUSTOM_REAL))// &
-                         '" Dimensions="'//trim(i2c(num_nodes))//'">'
-      write(xdmf_surf,*) '      '//trim(fname_h5_data)//':/it_'//trim(it_str)//'/ux'
-      write(xdmf_surf,*) '    </DataItem>'
-      write(xdmf_surf,*) '    <DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="'//trim(i2c(CUSTOM_REAL))// &
-                         '" Dimensions="'//trim(i2c(num_nodes))//'">'
-      write(xdmf_surf,*) '      '//trim(fname_h5_data)//':/it_'//trim(it_str)//'/uy'
-      write(xdmf_surf,*) '    </DataItem>'
-      write(xdmf_surf,*) '    <DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="'//trim(i2c(CUSTOM_REAL))// &
-                         '" Dimensions="'//trim(i2c(num_nodes))//'">'
-      write(xdmf_surf,*) '      '//trim(fname_h5_data)//':/it_'//trim(it_str)//'/uz'
-      write(xdmf_surf,*) '    </DataItem>'
-      write(xdmf_surf,*) '  </DataItem>'
-      write(xdmf_surf,*) '</Attribute>'
+      write(xdmf_surf,'(a)') '    <Attribute Name="velocity" AttributeType="Vector" Center="Node">'
+      write(xdmf_surf,'(a)') '      <DataItem ItemType="Function" Function="JOIN($0,$1,$2)" Dimensions="' &
+                             //trim(i2c(num_nodes))//' 3">'
+      write(xdmf_surf,'(a)') '        <DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="' &
+                             //trim(i2c(CUSTOM_REAL))//'" Dimensions="'//trim(i2c(num_nodes))//'">'
+      write(xdmf_surf,'(a)') '          '//trim(fname_h5_data)//':/it_'//trim(it_str)//'/ux'
+      write(xdmf_surf,'(a)') '        </DataItem>'
+      write(xdmf_surf,'(a)') '        <DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="' &
+                             //trim(i2c(CUSTOM_REAL))//'" Dimensions="'//trim(i2c(num_nodes))//'">'
+      write(xdmf_surf,'(a)') '          '//trim(fname_h5_data)//':/it_'//trim(it_str)//'/uy'
+      write(xdmf_surf,'(a)') '        </DataItem>'
+      write(xdmf_surf,'(a)') '        <DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="' &
+                             //trim(i2c(CUSTOM_REAL))//'" Dimensions="'//trim(i2c(num_nodes))//'">'
+      write(xdmf_surf,'(a)') '          '//trim(fname_h5_data)//':/it_'//trim(it_str)//'/uz'
+      write(xdmf_surf,'(a)') '        </DataItem>'
+      write(xdmf_surf,'(a)') '      </DataItem>'
+      write(xdmf_surf,'(a)') '    </Attribute>'
 
-      write(xdmf_surf,*) '</Grid>'
+      write(xdmf_surf,'(a)') '  </Grid>'
 
     enddo
 
-    write(xdmf_surf,*) '</Grid>'
-    write(xdmf_surf,*) '</Domain>'
-    write(xdmf_surf,*) '</Xdmf>'
+    write(xdmf_surf,'(a)') '</Grid>'
+    write(xdmf_surf,'(a)') '</Domain>'
+    write(xdmf_surf,'(a)') '</Xdmf>'
 
-    close(xdmf_surf)
+    close(xdmf_surf, iostat=ierr)
+    if (ierr /= 0) then
+      print *, 'Warning: error closing XDMF file for surface movie shard: ', io_id
+    endif
 
   enddo
 
@@ -686,80 +778,7 @@ end subroutine write_movie_surface_hdf5
 
 #endif
 
-
-#ifdef USE_HDF5
-
-  subroutine write_xdmf_surface_body(it_io, num_nodes)
-
-  use specfem_par
-  use specfem_par_movie_hdf5
-
-  implicit none
-
-  integer, intent(in)    :: it_io
-  integer, intent(in)    :: num_nodes
-  ! local parameters
-  integer :: i
-  character(len=20) :: it_str
-  character(len=MAX_STRING_LEN) :: fname_xdmf_surf
-  character(len=MAX_STRING_LEN) :: fname_h5_data_surf_xdmf
-
-  ! checks if anything do, only main process writes out xdmf file
-  if (myrank /= 0) return
-
-  ! append data section to xdmf file for surface movie
-  fname_xdmf_surf = trim(OUTPUT_FILES)//"/movie_surface.xmf"
-  fname_h5_data_surf_xdmf = "./movie_surface.h5"    ! relative to movie_surface.xmf file
-  ! this seems to point to a wrong directory:
-  !   fname_h5_data_surf_xdmf = trim(OUTPUT_FILES) // "/movie_surface.h5"
-
-  ! open xdmf file
-  open(unit=xdmf_surf, file=trim(fname_xdmf_surf), status='old', recl=256)
-
-  ! skip lines till the position where we want to write new information
-  do i = 1, surf_xdmf_pos
-    read(xdmf_surf, *)
-  enddo
-
-  !write(it_str, "(i6.6)") it_io
-  it_str = i2c(it_io)
-
-  write(xdmf_surf,*) '<Grid Name="surf_mov" GridType="Uniform">'
-  write(xdmf_surf,*) '<Time Value="'//trim(r2c(sngl((it_io-1)*DT-t0)))//'" />'
-  write(xdmf_surf,*) '<Topology Reference="/Xdmf/Domain/Topology" />'
-  write(xdmf_surf,*) '<Geometry Reference="/Xdmf/Domain/Geometry" />'
-  write(xdmf_surf,*) '<Attribute Name="ux" AttributeType="Scalar" Center="Node">'
-  write(xdmf_surf,*) '<DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="'&
-                                                     //trim(i2c(CUSTOM_REAL))//'" Dimensions="'//trim(i2c(num_nodes))//'">'
-  write(xdmf_surf,*) '      '//trim(fname_h5_data_surf_xdmf)//':/it_'//trim(it_str)//'/ux'
-  write(xdmf_surf,*) '</DataItem>'
-  write(xdmf_surf,*) '</Attribute>'
-  write(xdmf_surf,*) '<Attribute Name="uy" AttributeType="Scalar" Center="Node">'
-  write(xdmf_surf,*) '<DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="'&
-                                                     //trim(i2c(CUSTOM_REAL))//'" Dimensions="'//trim(i2c(num_nodes))//'">'
-  write(xdmf_surf,*) '      '//trim(fname_h5_data_surf_xdmf)//':/it_'//trim(it_str)//'/uy'
-  write(xdmf_surf,*) '</DataItem>'
-  write(xdmf_surf,*) '</Attribute>'
-  write(xdmf_surf,*) '<Attribute Name="uz" AttributeType="Scalar" Center="Node">'
-  write(xdmf_surf,*) '<DataItem ItemType="Uniform" Format="HDF" NumberType="Float" Precision="'&
-                                                     //trim(i2c(CUSTOM_REAL))//'" Dimensions="'//trim(i2c(num_nodes))//'">'
-  write(xdmf_surf,*) '      '//trim(fname_h5_data_surf_xdmf)//':/it_'//trim(it_str)//'/uz'
-  write(xdmf_surf,*) '</DataItem>'
-  write(xdmf_surf,*) '</Attribute>'
-  write(xdmf_surf,*) '</Grid>'
-  ! 20 lines
-
-  ! file finish
-  write(xdmf_surf,*) '</Grid>'
-  write(xdmf_surf,*) '</Domain>'
-  write(xdmf_surf,*) '</Xdmf>'
-
-  close(xdmf_surf)
-
-  ! updates file record position
-  surf_xdmf_pos = surf_xdmf_pos + 20
-
-  end subroutine write_xdmf_surface_body
-
-#endif
-
+! Note: The old write_xdmf_surface_body subroutine has been removed.
+! It used a fragile incremental file-writing approach with magic line numbers.
+! The new write_xdmf_surface_complete subroutine writes the complete XDMF file
+! at initialization, which is more robust and maintainable.

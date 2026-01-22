@@ -1461,6 +1461,7 @@
   implicit none
 
   ! local parameters
+  integer                       :: ierr
   character(len=MAX_STRING_LEN) :: fname_xdmf_kl, fname_xdmf_kl_oc, fname_xdmf_kl_ic
   character(len=MAX_STRING_LEN) :: fname_h5_data_kl_xdmf
 
@@ -1474,7 +1475,11 @@
   fname_h5_data_kl_xdmf = "./kernels.h5"  ! relative to movie_volume_cm.xmf file
 
   ! open xdmf file
-  open(unit=xdmf_kl, file=trim(fname_xdmf_kl), recl=256)
+  open(unit=xdmf_kl, file=trim(fname_xdmf_kl), status='replace', action='write', iostat=ierr, recl=256)
+  if (ierr /= 0) then
+    print *, 'Error: could not open kernel XDMF file ', trim(fname_xdmf_kl)
+    return
+  endif
 
   call write_xdmf_kernel_hdf5_header(nspec_vol_mov_all_proc_cm_conn, npoints_vol_mov_all_proc_cm, &
                                     fname_h5_data_kl_xdmf, xdmf_kl, 1)
@@ -1619,7 +1624,7 @@
   call write_xdmf_kernel_hdf5_footer(xdmf_kl)
 
   ! close xdmf file
-  close(xdmf_kl)
+  close(xdmf_kl, iostat=ierr)
 
   !
   ! write out the outer core xdmf file
@@ -1630,7 +1635,11 @@
     fname_h5_data_kl_xdmf = "./kernels.h5"  ! relative to movie_volume_oc.xmf file
 
     ! open xdmf file
-    open(unit=xdmf_kl, file=trim(fname_xdmf_kl_oc), recl=256)
+    open(unit=xdmf_kl, file=trim(fname_xdmf_kl_oc), status='replace', action='write', iostat=ierr, recl=256)
+    if (ierr /= 0) then
+      print *, 'Error: could not open kernel XDMF file ', trim(fname_xdmf_kl_oc)
+      return
+    endif
 
     call write_xdmf_kernel_hdf5_header(nspec_vol_mov_all_proc_oc_conn, npoints_vol_mov_all_proc_oc, &
                                        fname_h5_data_kl_xdmf, xdmf_kl, 2)
@@ -1646,7 +1655,7 @@
     call write_xdmf_kernel_hdf5_footer(xdmf_kl)
 
     ! close xdmf file
-    close(xdmf_kl)
+    close(xdmf_kl, iostat=ierr)
 
   endif
 
@@ -1659,7 +1668,11 @@
     fname_h5_data_kl_xdmf = "./kernels.h5"  ! relative to movie_volume_ic.xmf file
 
     ! open xdmf file
-    open(unit=xdmf_kl, file=trim(fname_xdmf_kl_ic), recl=256)
+    open(unit=xdmf_kl, file=trim(fname_xdmf_kl_ic), status='replace', action='write', iostat=ierr, recl=256)
+    if (ierr /= 0) then
+      print *, 'Error: could not open kernel XDMF file ', trim(fname_xdmf_kl_ic)
+      return
+    endif
 
     call write_xdmf_kernel_hdf5_header(nspec_vol_mov_all_proc_ic_conn, npoints_vol_mov_all_proc_ic, &
                                     fname_h5_data_kl_xdmf, xdmf_kl, 3)
@@ -1675,10 +1688,10 @@
     call write_xdmf_kernel_hdf5_one_data(fname_h5_data_kl_xdmf, 'beta_kernel', 'beta_kernel', &
                                       npoints_vol_mov_all_proc_ic, xdmf_kl, .true.) ! value on node
 
-    call write_xdmf_kernel_hdf5_footer(xdmf_vol)
+    call write_xdmf_kernel_hdf5_footer(xdmf_kl)
 
     ! close xdmf file
-    close(xdmf_kl)
+    close(xdmf_kl, iostat=ierr)
 
   endif
 

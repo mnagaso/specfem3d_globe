@@ -2428,3 +2428,27 @@ end module my_mpi
     call MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, my_local_mpi_comm_inter, status, ier)
 
   end subroutine world_probe_any_inter
+
+!
+!-------------------------------------------------------------------------------------------------
+!
+
+  subroutine consume_empty_message_inter(source, tag)
+
+    ! consumes an empty MPI message from the inter-communicator
+    ! this is needed to properly drain zero-length messages that have been
+    ! probed but not yet received (e.g., from ranks with npoints = 0 for movie volume)
+
+    use my_mpi
+
+    implicit none
+
+    integer, intent(in) :: source, tag
+    integer :: ier
+    integer :: status(MPI_STATUS_SIZE)
+    integer :: dummy
+
+    ! receive zero-length message to clear it from the MPI queue
+    call MPI_Recv(dummy, 0, MPI_INTEGER, source, tag, my_local_mpi_comm_inter, status, ier)
+
+  end subroutine consume_empty_message_inter

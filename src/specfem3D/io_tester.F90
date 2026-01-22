@@ -3,7 +3,7 @@ module io_bandwidth
 
     implicit none
     double precision :: start_time, end_time, time_delta
-    integer :: bytes_written
+    integer(kind=8) :: bytes_written  ! Use 64-bit integer to avoid overflow for large I/O
 
   contains
 
@@ -23,7 +23,7 @@ module io_bandwidth
 
     subroutine set_bytes_written(bytes)
       implicit none
-      integer, intent(in) :: bytes
+      integer(kind=8), intent(in) :: bytes
       bytes_written = bytes
     end subroutine set_bytes_written
 
@@ -34,7 +34,8 @@ module io_bandwidth
         ! element_size is the size of each element in bits (as storage_size returns in bits)
 
         ! Calculate the total bytes written and add to the existing value
-        bytes_written = bytes_written + element_size * num_elements / 8 ! Convert bits to bytes
+        ! Use 64-bit arithmetic to avoid overflow
+        bytes_written = bytes_written + int(element_size, kind=8) * int(num_elements, kind=8) / 8_8 ! Convert bits to bytes
 
       end subroutine set_bytes_written_from_array
 
@@ -57,9 +58,10 @@ module io_bandwidth
       use specfem_par
       use shared_parameters
       implicit none
-      integer :: i, total_bytes, unit_number, ierr
+      integer :: i, unit_number, ierr
       double precision :: elapsed_time, max_elapsed_time, &
     	      bandwidth, total_bandwidth, current_time
+      double precision :: bytes_written_dp, total_bytes_dp  ! Use double precision for large byte counts
       character(len=20) :: filename
       character(len=10) :: mygroup_str
       character(len=8) :: date_str
@@ -97,15 +99,16 @@ module io_bandwidth
 
       elapsed_time = time_delta
       if (elapsed_time > 0.0) then
-          bandwidth = bytes_written / (elapsed_time * 1.0e6)  ! Bandwidth in MB/s
+          bandwidth = dble(bytes_written) / (elapsed_time * 1.0d6)  ! Bandwidth in MB/s
 
-          ! calculate total bytes written across all processes
-          call sum_all_all_i(bytes_written, total_bytes)
+          ! calculate total bytes written across all processes using double precision
+          bytes_written_dp = dble(bytes_written)
+          call sum_all_dp(bytes_written_dp, total_bytes_dp)
           ! get the maximum elapsed time across all processes
           call max_all_dp(elapsed_time, max_elapsed_time)
 
             ! calculate total bandwidth
-            total_bandwidth = total_bytes / (max_elapsed_time * 1.0e6) ! Bandwidth in MB/s
+            total_bandwidth = total_bytes_dp / (max_elapsed_time * 1.0d6) ! Bandwidth in MB/s
 
             ! Each process writes to the file sequentially
             do i = 0, NPROCTOT_VAL-1
@@ -141,8 +144,8 @@ module io_bandwidth
               current_time = MPI_Wtime()
               call date_and_time(date=date_str, time=time_str, values=datetime_values)
 
-              write(unit_number, '(A, I0, A, I0, A, F12.6, A, F12.6, A, F24.12, A, A, A, A, A, I0)') &
-	          'mygroup: ', mygroup, ', total_bytes_written: ', total_bytes, ', max_elapsed_time (s): ', &
+              write(unit_number, '(A, I0, A, F20.0, A, F12.6, A, F12.6, A, F24.12, A, A, A, A, A, I0)') &
+	          'mygroup: ', mygroup, ', total_bytes_written: ', total_bytes_dp, ', max_elapsed_time (s): ', &
 	          max_elapsed_time, ', total_bandwidth: ', total_bandwidth, ' MB/s, mpi_wtime (s): ', current_time, &
             ', date: ', trim(date_str), ', time: ', trim(time_str), ', ms: ', datetime_values(8)
               close(unit_number)

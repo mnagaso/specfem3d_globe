@@ -435,9 +435,6 @@
     ! debug: log start of undo send on compute side
     print *, 'compute undo_send_start: subset', iteration_on_subset, 'rank', myrank, 'dest_ionod', dest_ionod
 
-    ! wait for all the send requests to finish
-    call wait_all_send()
-
     ! send data to the IO server
     call isend_cr_inter(displ_crust_mantle,NDIM*offset_nglob_cm(myrank),dest_ionod, &
                         io_tag_ford_undo_d_cm,req_dump_ford_undo(req_count))
@@ -552,6 +549,10 @@
     ! hdf5 i/o server
     ! store the number of mpi_isend reqs
     n_req_ford_undo = req_count - 1
+
+    ! wait for current subset's sends to complete before returning to time loop
+    ! (prevents MPI resource conflict between inter-communicator and compute-only communicator)
+    call wait_all_send()
 
     ! debug: log completion of undo send on compute side
     print *, 'compute undo_send_done: subset', iteration_on_subset, 'rank', myrank, 'dest_ionod', dest_ionod, &
