@@ -553,13 +553,21 @@ end subroutine write_movie_surface_hdf5
   num_elm = num_nodes / 4
 
   ! determine number of surface movie frames from time-stepping parameters
+  ! frames are written whenever mod(it-MOVIE_START,NTSTEP_BETWEEN_FRAMES) == 0
+  ! and it is within [MOVIE_START,MOVIE_STOP]
   max_surf_frames = 0
   it_first_surf = 0
 
   if (NTSTEP_BETWEEN_FRAMES > 0) then
-    it_first_surf = ((it_begin + NTSTEP_BETWEEN_FRAMES - 1)/NTSTEP_BETWEEN_FRAMES) * NTSTEP_BETWEEN_FRAMES
-    if (it_first_surf <= it_end) then
-      max_surf_frames = (it_end - it_first_surf) / NTSTEP_BETWEEN_FRAMES + 1
+    ! first time step (within this run) that satisfies the movie sampling rule
+    it_first_surf = MOVIE_START + ((max(it_begin, MOVIE_START) - MOVIE_START + NTSTEP_BETWEEN_FRAMES - 1) &
+                                   / NTSTEP_BETWEEN_FRAMES) * NTSTEP_BETWEEN_FRAMES
+
+    ! limit movie duration to the actual simulated range
+    if (min(it_end, MOVIE_STOP) >= it_first_surf) then
+      max_surf_frames = (min(it_end, MOVIE_STOP) - it_first_surf) / NTSTEP_BETWEEN_FRAMES + 1
+    else
+      max_surf_frames = 0
     endif
   endif
 
@@ -683,13 +691,21 @@ end subroutine write_movie_surface_hdf5
   if (HDF5_IO_NODES <= 1) return
 
   ! determine number of surface movie frames from time-stepping parameters
+  ! frames are written whenever mod(it-MOVIE_START,NTSTEP_BETWEEN_FRAMES) == 0
+  ! and it is within [MOVIE_START,MOVIE_STOP]
   max_surf_frames = 0
   it_first_surf = 0
 
   if (NTSTEP_BETWEEN_FRAMES > 0) then
-    it_first_surf = ((it_begin + NTSTEP_BETWEEN_FRAMES - 1)/NTSTEP_BETWEEN_FRAMES) * NTSTEP_BETWEEN_FRAMES
-    if (it_first_surf <= it_end) then
-      max_surf_frames = (it_end - it_first_surf) / NTSTEP_BETWEEN_FRAMES + 1
+    ! first time step (within this run) that satisfies the movie sampling rule
+    it_first_surf = MOVIE_START + ((max(it_begin, MOVIE_START) - MOVIE_START + NTSTEP_BETWEEN_FRAMES - 1) &
+                                   / NTSTEP_BETWEEN_FRAMES) * NTSTEP_BETWEEN_FRAMES
+
+    ! limit movie duration to the actual simulated range
+    if (min(it_end, MOVIE_STOP) >= it_first_surf) then
+      max_surf_frames = (min(it_end, MOVIE_STOP) - it_first_surf) / NTSTEP_BETWEEN_FRAMES + 1
+    else
+      max_surf_frames = 0
     endif
   endif
 
