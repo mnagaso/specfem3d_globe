@@ -1274,7 +1274,9 @@ contains
     ! and it is within [MOVIE_START,MOVIE_STOP]
     if (NTSTEP_BETWEEN_FRAMES > 0) then
       ! first time step (within this run) that satisfies the movie sampling rule
-      it_first_vol = MOVIE_START + ((max(it_begin, MOVIE_START) - MOVIE_START + NTSTEP_BETWEEN_FRAMES - 1) / NTSTEP_BETWEEN_FRAMES) * NTSTEP_BETWEEN_FRAMES
+      it_first_vol = MOVIE_START + &
+        ((max(it_begin, MOVIE_START) - MOVIE_START + NTSTEP_BETWEEN_FRAMES - 1) / NTSTEP_BETWEEN_FRAMES) &
+        * NTSTEP_BETWEEN_FRAMES
 
       ! limit movie duration to the actual simulated range
       if (min(it_end, MOVIE_STOP) >= it_first_vol) then
