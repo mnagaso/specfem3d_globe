@@ -445,15 +445,24 @@
     endif
 
     ! read the arrays
-    call h5_read_dataset_collect_hyperslab('displ_crust_mantle', b_displ_crust_mantle, (/0,sum(offset_nglob_cm(0:myrank-1))/), H5_COL)
-    call h5_read_dataset_collect_hyperslab('displ_outer_core',   b_displ_outer_core,   (/sum(offset_nglob_oc(0:myrank-1))/), H5_COL)
-    call h5_read_dataset_collect_hyperslab('displ_inner_core',   b_displ_inner_core,   (/0,sum(offset_nglob_ic(0:myrank-1))/), H5_COL)
-    call h5_read_dataset_collect_hyperslab('veloc_crust_mantle', b_veloc_crust_mantle, (/0,sum(offset_nglob_cm(0:myrank-1))/), H5_COL)
-    call h5_read_dataset_collect_hyperslab('veloc_outer_core',   b_veloc_outer_core,   (/sum(offset_nglob_oc(0:myrank-1))/), H5_COL)
-    call h5_read_dataset_collect_hyperslab('veloc_inner_core',   b_veloc_inner_core,   (/0,sum(offset_nglob_ic(0:myrank-1))/), H5_COL)
-    call h5_read_dataset_collect_hyperslab('accel_crust_mantle', b_accel_crust_mantle, (/0,sum(offset_nglob_cm(0:myrank-1))/), H5_COL)
-    call h5_read_dataset_collect_hyperslab('accel_outer_core',   b_accel_outer_core,   (/sum(offset_nglob_oc(0:myrank-1))/), H5_COL)
-    call h5_read_dataset_collect_hyperslab('accel_inner_core',   b_accel_inner_core,   (/0,sum(offset_nglob_ic(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('displ_crust_mantle', b_displ_crust_mantle, &
+                         (/0,sum(offset_nglob_cm(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('displ_outer_core',   b_displ_outer_core,   &
+                         (/sum(offset_nglob_oc(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('displ_inner_core',   b_displ_inner_core,   &
+                         (/0,sum(offset_nglob_ic(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('veloc_crust_mantle', b_veloc_crust_mantle, &
+                         (/0,sum(offset_nglob_cm(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('veloc_outer_core',   b_veloc_outer_core,   &
+                         (/sum(offset_nglob_oc(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('veloc_inner_core',   b_veloc_inner_core,   &
+                         (/0,sum(offset_nglob_ic(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('accel_crust_mantle', b_accel_crust_mantle, &
+                         (/0,sum(offset_nglob_cm(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('accel_outer_core',   b_accel_outer_core,   &
+                         (/sum(offset_nglob_oc(0:myrank-1))/), H5_COL)
+    call h5_read_dataset_collect_hyperslab('accel_inner_core',   b_accel_inner_core,   &
+                         (/0,sum(offset_nglob_ic(0:myrank-1))/), H5_COL)
     call h5_read_dataset_collect_hyperslab('epsilondev_xx_crust_mantle', b_epsilondev_xx_crust_mantle, &
                                            (/0,0,0,sum(offset_nspec_cm_soa(0:myrank-1))/), H5_COL)
     call h5_read_dataset_collect_hyperslab('epsilondev_yy_crust_mantle', b_epsilondev_yy_crust_mantle, &
@@ -540,15 +549,24 @@
     call h5_open_file(file_name)
 
     ! read the arrays (non-collective)
-    call h5_read_dataset_collect_hyperslab('displ_crust_mantle', b_displ_crust_mantle, (/0,sum(offset_nglob_cm(0:myrank-1))/), .false.)
-    call h5_read_dataset_collect_hyperslab('displ_outer_core',   b_displ_outer_core,   (/sum(offset_nglob_oc(0:myrank-1))/), .false.)
-    call h5_read_dataset_collect_hyperslab('displ_inner_core',   b_displ_inner_core,   (/0,sum(offset_nglob_ic(0:myrank-1))/), .false.)
-    call h5_read_dataset_collect_hyperslab('veloc_crust_mantle', b_veloc_crust_mantle, (/0,sum(offset_nglob_cm(0:myrank-1))/), .false.)
-    call h5_read_dataset_collect_hyperslab('veloc_outer_core',   b_veloc_outer_core,   (/sum(offset_nglob_oc(0:myrank-1))/), .false.)
-    call h5_read_dataset_collect_hyperslab('veloc_inner_core',   b_veloc_inner_core,   (/0,sum(offset_nglob_ic(0:myrank-1))/), .false.)
-    call h5_read_dataset_collect_hyperslab('accel_crust_mantle', b_accel_crust_mantle, (/0,sum(offset_nglob_cm(0:myrank-1))/), .false.)
-    call h5_read_dataset_collect_hyperslab('accel_outer_core',   b_accel_outer_core,   (/sum(offset_nglob_oc(0:myrank-1))/), .false.)
-    call h5_read_dataset_collect_hyperslab('accel_inner_core',   b_accel_inner_core,   (/0,sum(offset_nglob_ic(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('displ_crust_mantle', b_displ_crust_mantle, &
+                         (/0,sum(offset_nglob_cm(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('displ_outer_core',   b_displ_outer_core,   &
+                         (/sum(offset_nglob_oc(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('displ_inner_core',   b_displ_inner_core,   &
+                         (/0,sum(offset_nglob_ic(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('veloc_crust_mantle', b_veloc_crust_mantle, &
+                         (/0,sum(offset_nglob_cm(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('veloc_outer_core',   b_veloc_outer_core,   &
+                         (/sum(offset_nglob_oc(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('veloc_inner_core',   b_veloc_inner_core,   &
+                         (/0,sum(offset_nglob_ic(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('accel_crust_mantle', b_accel_crust_mantle, &
+                         (/0,sum(offset_nglob_cm(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('accel_outer_core',   b_accel_outer_core,   &
+                         (/sum(offset_nglob_oc(0:myrank-1))/), .false.)
+    call h5_read_dataset_collect_hyperslab('accel_inner_core',   b_accel_inner_core,   &
+                         (/0,sum(offset_nglob_ic(0:myrank-1))/), .false.)
     call h5_read_dataset_collect_hyperslab('epsilondev_xx_crust_mantle', b_epsilondev_xx_crust_mantle, &
                                            (/0,0,0,sum(offset_nspec_cm_soa(0:myrank-1))/), .false.)
     call h5_read_dataset_collect_hyperslab('epsilondev_yy_crust_mantle', b_epsilondev_yy_crust_mantle, &
