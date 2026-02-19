@@ -391,14 +391,3 @@ contains
   end subroutine io_throttle_finalize
 
 end module io_throttle
-
-!
-!-------------------------------------------------------------------------------------------------
-!
-
-!> Helper routine to flush IMAIN (called from module)
-subroutine flush_IMAIN()
-  use constants, only: IMAIN
-  implicit none
-  flush(IMAIN)
-end subroutine flush_IMAIN
