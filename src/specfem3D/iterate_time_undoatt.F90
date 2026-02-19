@@ -234,6 +234,9 @@
   ! shift execution of simultaneous events to avoid a high peak bandwidth for snapshots file I/O
   if (NUMBER_OF_SIMULTANEOUS_RUNS > 1) call prepare_simultaneous_event_execution_shift_undoatt()
 
+  ! Initialize I/O throttle module
+  call io_throttle_init_wrapper(myrank)
+
   ! synchronize all processes to make sure everybody is ready to start time loop
   call synchronize_all()
   if (myrank == 0) then
@@ -660,6 +663,9 @@
   ! user output of runtime
   call print_elapsed_time()
 
+  ! Finalize I/O throttle module
+  call io_throttle_finalize_wrapper(myrank)
+
   ! Transfer fields from GPU card to host for further analysis
   if (GPU_MODE) call it_transfer_from_GPU()
 
@@ -677,3 +683,53 @@
   if (HDF5_IO_NODES > 0) call synchronize_inter()
 
   end subroutine iterate_time_undoatt
+!
+!-------------------------------------------------------------------------------------------------
+!
+
+!> Wrapper to initialize I/O throttle module
+!! This wrapper is needed to avoid circular dependencies with module use statements
+  subroutine io_throttle_init_wrapper(myrank)
+
+  use io_throttle, only: io_throttle_init, &
+                         IO_PRE_CHECKPOINT_DELAY_SEC, IO_MAX_BANDWIDTH_MBPS, &
+                         IO_ADAPTIVE_THROTTLE, IO_RUNTIME_THROTTLE_CONTROL, &
+                         OUTPUT_FILES_DIR
+  use shared_input_parameters, only: IO_PRE_CHECKPOINT_DELAY_SEC_PAR => IO_PRE_CHECKPOINT_DELAY_SEC, &
+                                     IO_MAX_BANDWIDTH_MBPS_PAR => IO_MAX_BANDWIDTH_MBPS, &
+                                     IO_ADAPTIVE_THROTTLE_PAR => IO_ADAPTIVE_THROTTLE, &
+                                     IO_RUNTIME_THROTTLE_CONTROL_PAR => IO_RUNTIME_THROTTLE_CONTROL, &
+                                     OUTPUT_FILES
+
+  implicit none
+
+  integer, intent(in) :: myrank
+
+  ! Copy Par_file values to io_throttle module
+  IO_PRE_CHECKPOINT_DELAY_SEC = IO_PRE_CHECKPOINT_DELAY_SEC_PAR
+  IO_MAX_BANDWIDTH_MBPS = IO_MAX_BANDWIDTH_MBPS_PAR
+  IO_ADAPTIVE_THROTTLE = IO_ADAPTIVE_THROTTLE_PAR
+  IO_RUNTIME_THROTTLE_CONTROL = IO_RUNTIME_THROTTLE_CONTROL_PAR
+  OUTPUT_FILES_DIR = OUTPUT_FILES
+
+  ! Initialize the module
+  call io_throttle_init(myrank)
+
+  end subroutine io_throttle_init_wrapper
+
+!
+!-------------------------------------------------------------------------------------------------
+!
+
+!> Wrapper to finalize I/O throttle module
+  subroutine io_throttle_finalize_wrapper(myrank)
+
+  use io_throttle, only: io_throttle_finalize
+
+  implicit none
+
+  integer, intent(in) :: myrank
+
+  call io_throttle_finalize(myrank)
+
+  end subroutine io_throttle_finalize_wrapper

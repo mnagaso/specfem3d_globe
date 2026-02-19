@@ -88,6 +88,7 @@ specfem3D_SOLVER_OBJECTS += \
 	$O/get_attenuation.solverstatic.o \
 	$O/hdf5_io_server.solverstatic.o \
 	$O/initialize_simulation.solverstatic.o \
+	$O/io_throttle.solverstatic.o \
 	$O/io_tester.solverstatic.o \
 	$O/iterate_time.solverstatic.o \
 	$O/iterate_time_undoatt.solverstatic.o \
@@ -155,6 +156,7 @@ specfem3D_MODULES = \
 	$(FC_MODDIR)/constants_solver.$(FC_MODEXT) \
 	$(FC_MODDIR)/io_bandwidth.$(FC_MODEXT) \
 	$(FC_MODDIR)/io_server_hdf5.$(FC_MODEXT) \
+	$(FC_MODDIR)/io_throttle.$(FC_MODEXT) \
 	$(FC_MODDIR)/manager_adios.$(FC_MODEXT) \
 	$(FC_MODDIR)/mod_element.$(FC_MODEXT) \
 	$(FC_MODDIR)/mod_element_att.$(FC_MODEXT) \
@@ -466,6 +468,10 @@ $O/finalize_simulation.solverstatic.o: $O/hdf5_io_server.solverstatic.o
 $O/hdf5_io_server.solverstatic.o: $O/io_tester.solverstatic.o
 $O/save_forward_arrays_hdf5.solverstatic.o: $O/io_tester.solverstatic.o
 $O/write_movie_volume_hdf5.solverstatic.o: $O/hdf5_io_server.solverstatic.o
+
+# ensure io_throttle module is compiled before dependent files
+$O/save_forward_arrays.solverstatic.o: $O/io_throttle.solverstatic.o
+$O/iterate_time_undoatt.solverstatic.o: $O/io_throttle.solverstatic.o
 
 ###
 ### specfem3D - optimized flags and dependence on values from mesher here

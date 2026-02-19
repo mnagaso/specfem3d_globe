@@ -229,6 +229,12 @@
   call bcast_all_singlel(SHIFT_SIMULTANEOUS_RUNS)
   call bcast_all_singledp(FILESYSTEM_IO_BANDWIDTH)
 
+  ! (optional) I/O throttling for checkpoint writes
+  call bcast_all_singledp(IO_PRE_CHECKPOINT_DELAY_SEC)
+  call bcast_all_singlei(IO_MAX_BANDWIDTH_MBPS)
+  call bcast_all_singlel(IO_ADAPTIVE_THROTTLE)
+  call bcast_all_singlel(IO_RUNTIME_THROTTLE_CONTROL)
+
   ! empirical minimum period resolved estimation
   call bcast_all_singledp(T_min_period)
   ! empirical minimum wavelength resolved estimation

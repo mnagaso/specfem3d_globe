@@ -216,6 +216,16 @@
   logical :: SHIFT_SIMULTANEOUS_RUNS = .false.
   double precision :: FILESYSTEM_IO_BANDWIDTH = 0.d0
 
+  ! (optional) I/O throttling for checkpoint writes
+  ! Pre-checkpoint delay in seconds (enables staggering across simultaneous runs)
+  double precision :: IO_PRE_CHECKPOINT_DELAY_SEC = 0.d0
+  ! Maximum I/O bandwidth in MB/s (0 = unlimited)
+  integer :: IO_MAX_BANDWIDTH_MBPS = 0
+  ! Enable adaptive throttling (dynamic rate adjustment based on system load)
+  logical :: IO_ADAPTIVE_THROTTLE = .false.
+  ! Enable runtime throttle control via control file
+  logical :: IO_RUNTIME_THROTTLE_CONTROL = .false.
+
   ! HDF5 file i/o
   logical :: HDF5_ENABLED      = .false. ! for all databases i/o in hdf5
   logical :: HDF5_FOR_MOVIES   = .false. ! for movies (shakemap, surface movies, volume movies) ! TODO: HDF5 not used

@@ -448,3 +448,24 @@ HDF5_KERNEL_VIS                 = .false.
 # write out snapshot files for visualization (GLL point based 1d arrays)
 HDF5_SNAPSHOT_VIS               = .false.
 
+#-----------------------------------------------------------
+#
+# I/O Throttling for Checkpoint Writes
+#
+#-----------------------------------------------------------
+
+# Pre-checkpoint delay in seconds (enables staggering across simultaneous runs)
+# Set > 0 to introduce a sleep before each checkpoint write
+IO_PRE_CHECKPOINT_DELAY_SEC     = 0.d0
+
+# Maximum I/O bandwidth in MB/s (0 = unlimited)
+# When set > 0, limits the instantaneous write bandwidth
+IO_MAX_BANDWIDTH_MBPS           = 0
+
+# Enable adaptive throttling (dynamic rate adjustment based on system load)
+IO_ADAPTIVE_THROTTLE            = .false.
+
+# Enable runtime throttle control via control file
+# When enabled, reads OUTPUT_FILES/io_throttle_control.txt before each checkpoint
+# to allow external processes (e.g., digital twin) to adjust throttle parameters
+IO_RUNTIME_THROTTLE_CONTROL     = .false.

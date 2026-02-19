@@ -383,6 +383,12 @@
     call read_value_double_precision(FILESYSTEM_IO_BANDWIDTH, 'FILESYSTEM_IO_BANDWIDTH', ier); ier = 0
   endif
 
+  ! (optional) I/O throttling for checkpoint writes
+  call read_value_double_precision(IO_PRE_CHECKPOINT_DELAY_SEC, 'IO_PRE_CHECKPOINT_DELAY_SEC', ier); ier = 0
+  call read_value_integer(IO_MAX_BANDWIDTH_MBPS, 'IO_MAX_BANDWIDTH_MBPS', ier); ier = 0
+  call read_value_logical(IO_ADAPTIVE_THROTTLE, 'IO_ADAPTIVE_THROTTLE', ier); ier = 0
+  call read_value_logical(IO_RUNTIME_THROTTLE_CONTROL, 'IO_RUNTIME_THROTTLE_CONTROL', ier); ier = 0
+
   ! HDF5 file I/O
   ! (optional) hdf5 database io flag
   call read_value_logical(HDF5_ENABLED, 'HDF5_ENABLED', ier); ier = 0

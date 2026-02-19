@@ -220,6 +220,7 @@
   use specfem_par_innercore
   use specfem_par_outercore
   use specfem_par_full_gravity
+  use io_throttle, only: io_throttle_apply_pre_checkpoint_delay
 
   implicit none
 
@@ -227,6 +228,9 @@
   integer :: iteration_on_subset_tmp
   integer :: ier
   character(len=MAX_STRING_LEN) :: outputname
+
+  ! Apply I/O throttle delay before checkpoint write
+  call io_throttle_apply_pre_checkpoint_delay(myrank, iteration_on_subset)
 
   ! transfers wavefields from GPU device to CPU host
   if (GPU_MODE) then
