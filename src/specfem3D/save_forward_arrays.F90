@@ -220,7 +220,8 @@
   use specfem_par_innercore
   use specfem_par_outercore
   use specfem_par_full_gravity
-  use io_throttle, only: io_throttle_apply_pre_checkpoint_delay
+  use io_throttle, only: io_throttle_apply_pre_checkpoint_delay, &
+                         io_throttle_apply_post_write_delay
 
   implicit none
 
@@ -228,6 +229,9 @@
   integer :: iteration_on_subset_tmp
   integer :: ier
   character(len=MAX_STRING_LEN) :: outputname
+  double precision :: write_start_time, write_end_time, write_elapsed
+  double precision :: bytes_written_this_rank
+  double precision, external :: wtime
 
   ! Apply I/O throttle delay before checkpoint write
   call io_throttle_apply_pre_checkpoint_delay(myrank, iteration_on_subset)
@@ -252,10 +256,51 @@
     endif
   endif
 
+  ! Estimate bytes written per rank for bandwidth enforcement and adaptive feedback.
+  ! Wavefield arrays: CM and IC have NDIM components, OC is scalar, 3 arrays each.
+  bytes_written_this_rank = dble(NDIM * 3 * NGLOB_CRUST_MANTLE + &
+                                 NDIM * 3 * NGLOB_INNER_CORE + &
+                                 3 * NGLOB_OUTER_CORE) * dble(CUSTOM_REAL)
+
+  ! Strain deviator arrays (epsilondev): saved by HDF5/ADIOS undo_att but not binary
+  if (HDF5_ENABLED .or. ADIOS_FOR_UNDO_ATTENUATION) then
+    bytes_written_this_rank = bytes_written_this_rank + &
+        dble(5 * NGLLX * NGLLY * NGLLZ) * &
+        dble(NSPEC_CRUST_MANTLE_STR_OR_ATT + NSPEC_INNER_CORE_STR_OR_ATT) * &
+        dble(CUSTOM_REAL)
+  endif
+
+  ! Rotation arrays
+  if (ROTATION_VAL) then
+    if (HDF5_ENABLED .or. ADIOS_FOR_UNDO_ATTENUATION) then
+      ! HDF5/ADIOS store rotation element-locally (NGLLCUBE × NSPEC)
+      bytes_written_this_rank = bytes_written_this_rank + &
+          dble(2 * NGLLX * NGLLY * NGLLZ * NSPEC_OUTER_CORE) * dble(CUSTOM_REAL)
+    else
+      ! Binary stores assembled (NGLOB)
+      bytes_written_this_rank = bytes_written_this_rank + &
+          dble(2 * NGLOB_OUTER_CORE) * dble(CUSTOM_REAL)
+    endif
+  endif
+
+  ! Attenuation arrays (element-local: NGLLCUBE × N_SLS × NSPEC)
+  if (ATTENUATION_VAL) then
+    bytes_written_this_rank = bytes_written_this_rank + &
+        dble(5 * NGLLX * NGLLY * NGLLZ * N_SLS) * &
+        dble(NSPEC_CRUST_MANTLE_ATTENUATION + NSPEC_INNER_CORE_ATTENUATION) * &
+        dble(CUSTOM_REAL)
+  endif
+
   if (ADIOS_FOR_UNDO_ATTENUATION) then
+    write_start_time = wtime()
     call save_forward_arrays_undoatt_adios()
+    write_end_time = wtime()
+    write_elapsed = write_end_time - write_start_time
   else if (HDF5_ENABLED) then
+    write_start_time = wtime()
     call save_forward_arrays_undoatt_hdf5()
+    write_end_time = wtime()
+    write_elapsed = write_end_time - write_start_time
   else
     ! current subset iteration
     iteration_on_subset_tmp = iteration_on_subset
@@ -267,6 +312,9 @@
 
     ! debug
     !if (myrank == 0 ) print *,'saving in: ',trim(LOCAL_PATH)//'/'//trim(outputname), iteration_on_subset_tmp,it
+
+    ! Time the write operation
+    write_start_time = wtime()
 
     open(unit=IOUT,file=trim(outputname),status='unknown',form='unformatted',action='write',iostat=ier)
     if (ier /= 0 ) call exit_MPI(myrank,'Error opening file proc***_save_frame_at** for writing')
@@ -311,7 +359,19 @@
     endif
 
     close(IOUT)
+
+    write_end_time = wtime()
+    write_elapsed = write_end_time - write_start_time
+
+    ! Override byte estimate with actual file size if available
+    inquire(file=trim(outputname), size=ier)
+    if (ier > 0) then
+      bytes_written_this_rank = dble(ier)
+    endif
   endif
+
+  ! Apply post-write delay for bandwidth enforcement and adaptive feedback
+  call io_throttle_apply_post_write_delay(myrank, bytes_written_this_rank, write_elapsed)
 
   end subroutine save_forward_arrays_undoatt
 

@@ -691,6 +691,7 @@
 !! This wrapper is needed to avoid circular dependencies with module use statements
   subroutine io_throttle_init_wrapper(myrank)
 
+  use constants, only: mygroup
   use io_throttle, only: io_throttle_init, &
                          IO_PRE_CHECKPOINT_DELAY_SEC, IO_MAX_BANDWIDTH_MBPS, &
                          IO_ADAPTIVE_THROTTLE, IO_RUNTIME_THROTTLE_CONTROL, &
@@ -712,8 +713,8 @@
   IO_RUNTIME_THROTTLE_CONTROL = IO_RUNTIME_THROTTLE_CONTROL_PAR
   OUTPUT_FILES_DIR = OUTPUT_FILES
 
-  ! Initialize the module
-  call io_throttle_init(myrank)
+  ! Initialize the module (pass mygroup for staggered delay)
+  call io_throttle_init(myrank, mygroup)
 
   end subroutine io_throttle_init_wrapper
 
