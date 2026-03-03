@@ -31,9 +31,9 @@ module io_server_hdf5
   use shared_parameters, only: HDF5_IO_NODES, &
     IO_storage_task, IO_compute_task, H5_COL
 
-  implicit none
-
 #ifdef USE_HDF5
+
+  implicit none
 
   ! public routines
   public :: initialize_io_server
