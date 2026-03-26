@@ -538,6 +538,7 @@
   use specfem_par_movie, only: npoints_3dmovie,muvstore_crust_mantle_3dmovie,mask_3dmovie,nu_3dmovie
   use specfem_par_movie_hdf5
   use io_server_hdf5
+  use io_bandwidth, only: start_timer,stop_timer,set_bytes_written_from_array
 #endif
 
   implicit none
@@ -713,6 +714,8 @@
     endif
     call h5_open_group(group_name)
 
+    call start_timer()
+
     call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'NN', store_val3d_NN, &
                                                      (/sum(offset_poin_vol(0:myrank-1))/), H5_COL)
     call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'EE', store_val3d_EE, &
@@ -725,6 +728,9 @@
                                                      (/sum(offset_poin_vol(0:myrank-1))/), H5_COL)
     call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'EZ', store_val3d_EZ, &
                                                      (/sum(offset_poin_vol(0:myrank-1))/), H5_COL)
+
+    call stop_timer()
+    call set_bytes_written_from_array(CUSTOM_REAL * 8, 6 * npoints_3dmovie)
 
     call h5_close_group()
     call h5_close_file_p()
@@ -1034,6 +1040,7 @@
   use specfem_par, only: it
   use specfem_par_movie_hdf5
   use io_server_hdf5
+  use io_bandwidth, only: start_timer,stop_timer,set_bytes_written_from_array
 #endif
 
   implicit none
@@ -1170,12 +1177,17 @@
     endif
     call h5_open_group(group_name)
 
+    call start_timer()
+
     call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'N', store_val3d_N(1:npoints_3dmovie), &
                                                      (/offset_poin_vol(0:myrank-1)/), H5_COL)
     call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'E', store_val3d_E(1:npoints_3dmovie), &
                                                      (/offset_poin_vol(0:myrank-1)/), H5_COL)
     call h5_write_dataset_collect_hyperslab_in_group(trim(movie_prefix)//'Z', store_val3d_Z(1:npoints_3dmovie), &
                                                      (/offset_poin_vol(0:myrank-1)/), H5_COL)
+
+    call stop_timer()
+    call set_bytes_written_from_array(CUSTOM_REAL * 8, 3 * npoints_3dmovie)
 
     call h5_close_group()
     call h5_close_file()
@@ -1223,6 +1235,7 @@
   use specfem_par_movie_hdf5
   use io_server_hdf5, only: io_tag_vol_norm_cm, io_tag_vol_norm_oc, io_tag_vol_norm_ic, &
                             dest_ionod, n_req_vol, req_dump_vol, wait_all_send
+  use io_bandwidth, only: start_timer,stop_timer,set_bytes_written_from_array
 #endif
 
   implicit none
@@ -1365,6 +1378,8 @@
     endif
     call h5_open_group(group_name)
 
+    call start_timer()
+
     if (OUTPUT_CRUST_MANTLE) then
       call h5_write_dataset_collect_hyperslab_in_group('reg1_displ', tmp_data_cm, &
                                                      (/sum(offset_nglob_cm(0:myrank-1))/), H5_COL)
@@ -1379,6 +1394,11 @@
       call h5_write_dataset_collect_hyperslab_in_group('reg3_displ', tmp_data_ic, &
                                              (/sum(offset_nglob_ic(0:myrank-1))/), H5_COL)
     endif
+
+    call stop_timer()
+    if (OUTPUT_CRUST_MANTLE) call set_bytes_written_from_array(CUSTOM_REAL * 8, NGLOB_CRUST_MANTLE)
+    if (OUTPUT_OUTER_CORE) call set_bytes_written_from_array(CUSTOM_REAL * 8, NGLOB_OUTER_CORE)
+    if (OUTPUT_INNER_CORE) call set_bytes_written_from_array(CUSTOM_REAL * 8, NGLOB_INNER_CORE)
 
     call h5_close_group()
     call h5_close_file_p()
@@ -1428,6 +1448,7 @@
   use specfem_par_movie_hdf5
   use io_server_hdf5, only: io_tag_vol_norm_cm, io_tag_vol_norm_oc, io_tag_vol_norm_ic, &
                             dest_ionod, n_req_vol, req_dump_vol, wait_all_send
+  use io_bandwidth, only: start_timer,stop_timer,set_bytes_written_from_array
 #endif
 
   implicit none
@@ -1568,6 +1589,8 @@
     endif
     call h5_open_group(group_name)
 
+    call start_timer()
+
     if (OUTPUT_CRUST_MANTLE) then
       call h5_write_dataset_collect_hyperslab_in_group('reg1_veloc', tmp_data_cm, &
                                                      (/sum(offset_nglob_cm(0:myrank-1))/), H5_COL)
@@ -1582,6 +1605,11 @@
       call h5_write_dataset_collect_hyperslab_in_group('reg3_veloc', tmp_data_ic, &
                                              (/sum(offset_nglob_ic(0:myrank-1))/), H5_COL)
     endif
+
+    call stop_timer()
+    if (OUTPUT_CRUST_MANTLE) call set_bytes_written_from_array(CUSTOM_REAL * 8, NGLOB_CRUST_MANTLE)
+    if (OUTPUT_OUTER_CORE) call set_bytes_written_from_array(CUSTOM_REAL * 8, NGLOB_OUTER_CORE)
+    if (OUTPUT_INNER_CORE) call set_bytes_written_from_array(CUSTOM_REAL * 8, NGLOB_INNER_CORE)
 
     call h5_close_group()
     call h5_close_file_p()
@@ -1631,6 +1659,7 @@
   use specfem_par_movie_hdf5
   use io_server_hdf5, only: io_tag_vol_norm_cm, io_tag_vol_norm_oc, io_tag_vol_norm_ic, &
                             dest_ionod, n_req_vol, req_dump_vol, wait_all_send
+  use io_bandwidth, only: start_timer,stop_timer,set_bytes_written_from_array
 #endif
 
   implicit none
@@ -1774,6 +1803,8 @@
     endif
     call h5_open_group(group_name)
 
+    call start_timer()
+
     if (OUTPUT_CRUST_MANTLE) then
       call h5_write_dataset_collect_hyperslab_in_group('reg1_accel', tmp_data_cm, &
                                                      (/sum(offset_nglob_cm(0:myrank-1))/), H5_COL)
@@ -1788,6 +1819,11 @@
       call h5_write_dataset_collect_hyperslab_in_group('reg3_accel', tmp_data_ic, &
                                              (/sum(offset_nglob_ic(0:myrank-1))/), H5_COL)
     endif
+
+    call stop_timer()
+    if (OUTPUT_CRUST_MANTLE) call set_bytes_written_from_array(CUSTOM_REAL * 8, NGLOB_CRUST_MANTLE)
+    if (OUTPUT_OUTER_CORE) call set_bytes_written_from_array(CUSTOM_REAL * 8, NGLOB_OUTER_CORE)
+    if (OUTPUT_INNER_CORE) call set_bytes_written_from_array(CUSTOM_REAL * 8, NGLOB_INNER_CORE)
 
     call h5_close_group()
     call h5_close_file_p()

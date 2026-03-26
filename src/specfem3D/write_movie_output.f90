@@ -33,6 +33,9 @@
     scale_displ,scale_veloc, &
     HDF5_ENABLED
 
+  use shared_parameters, only: HDF5_IO_NODES
+  use io_bandwidth, only: initialize_bytes_written,calculate_bandwidth_all_procs
+
   use specfem_par_crustmantle, only: displ_crust_mantle,veloc_crust_mantle,accel_crust_mantle, &
     eps_trace_over_3_crust_mantle,epsilondev_xx_crust_mantle,epsilondev_xy_crust_mantle,epsilondev_xz_crust_mantle, &
     epsilondev_yy_crust_mantle,epsilondev_yz_crust_mantle, &
@@ -128,6 +131,9 @@
     ! file output
     if (mod(it-MOVIE_START,NTSTEP_BETWEEN_FRAMES) == 0 &
       .and. it >= MOVIE_START .and. it <= MOVIE_STOP) then
+
+      ! IO bandwidth tracking for movie volume writes (non-IO-server path)
+      if (HDF5_ENABLED .and. HDF5_IO_NODES == 0) call initialize_bytes_written()
 
       select case (MOVIE_VOLUME_TYPE)
       case (1)
@@ -311,6 +317,9 @@
         call exit_MPI(myrank, 'MOVIE_VOLUME_TYPE has to be in range from 1 to 9')
 
       end select ! MOVIE_VOLUME_TYPE
+
+      ! IO bandwidth tracking: flush per-frame bandwidth to io_band_*.txt
+      if (HDF5_ENABLED .and. HDF5_IO_NODES == 0) call calculate_bandwidth_all_procs()
 
       ! executes an external script on the node
       if (RUN_EXTERNAL_MOVIE_SCRIPT) then

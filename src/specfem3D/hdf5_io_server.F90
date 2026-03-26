@@ -678,6 +678,7 @@ contains
   integer, dimension(:), allocatable :: n_ionode_on_cluster ! number of ionode on the cluster nodes
   integer :: i,j,c,n_cluster_node,my_cluster_id,n_rest_io,n_ionode,n_comp_node
   integer :: comp_rank_counter, dest_io_id, idx
+  integer :: global_rr_io
   real(kind=CUSTOM_REAL) :: io_ratio ! dum
   character(len=MAX_STRING_LEN), dimension(sizeval) :: dump_node_names ! names of cluster nodes
 
@@ -734,14 +735,17 @@ contains
   ! select HDF5_IO_NODES of io nodes
   allocate(n_ionode_on_cluster(n_cluster_node))
   !! decide the number of io node on each cluster node
-  ! at least one io node on each cluster node
-  n_ionode_on_cluster(:) = 1
-
-  ! check if the total number of io node > HDF5_IO_NODES
-  if (sum(n_ionode_on_cluster) > HDF5_IO_NODES) then
-    print *, "Error: HDF5_IO_NODES in Par_file is too small,"
-    print *, "       at least one io node for each cluster node is necessary"
-    stop 'Invalid HDF5_IO_NODES value too small'
+  if (HDF5_IO_NODES >= n_cluster_node) then
+    ! at least one io node on each cluster node
+    n_ionode_on_cluster(:) = 1
+  else
+    ! fewer IO nodes than physical nodes — allow cross-node IO
+    n_ionode_on_cluster(:) = 0
+    if (myrank == 0) then
+      print *, "IO server: HDF5_IO_NODES (", HDF5_IO_NODES, &
+               ") < physical nodes (", n_cluster_node, ")"
+      print *, "  Cross-node IO communication will occur."
+    endif
   endif
 
   ! share the rest of ionodes based on the ratio of compute nodes
@@ -767,6 +771,7 @@ contains
   !! choose the io node from the last rank of each cluster node
   n_ionode = 0
   comp_rank_counter = -1
+  global_rr_io = 0
 
   ! allocate and initialize IO-to-compute mapping arrays
   if (HDF5_IO_NODES > 0) then
@@ -807,7 +812,13 @@ contains
         else
           ! j is compute node
           comp_rank_counter = comp_rank_counter + 1
-          dest_io_id = mod(c-1,n_ionode_on_cluster(i)) + n_ionode
+          if (n_ionode_on_cluster(i) > 0) then
+            dest_io_id = mod(c-1,n_ionode_on_cluster(i)) + n_ionode
+          else
+            ! no local IO node — round-robin across all IO nodes
+            dest_io_id = mod(global_rr_io, HDF5_IO_NODES)
+            global_rr_io = global_rr_io + 1
+          endif
 
           if (HDF5_IO_NODES > 0) then
             idx = io_nproc_all(dest_io_id+1) + 1
@@ -1552,6 +1563,10 @@ contains
           end select
           vol_frame_count = vol_frame_count + 1
           n_recv_msg_vol = 0
+
+          ! per-frame IO bandwidth tracking for volume movie
+          call calculate_bandwidth_all_procs()
+          call initialize_bytes_written()
 
           if (VERBOSE .and. IO_storage_task) then
             print *, 'io_server: completed volume frame ', vol_frame_count, '/', max_vol_frames
