@@ -863,6 +863,209 @@ contains
 
   end subroutine select_io_node
 
+  integer function io_local_compute_count()
+
+  use specfem_par, only: NPROCTOT_VAL
+
+  implicit none
+
+  io_local_compute_count = 0
+
+  if (HDF5_IO_NODES <= 1) then
+    io_local_compute_count = NPROCTOT_VAL
+    return
+  endif
+
+  if (.not. allocated(io_nproc_all)) return
+  if (my_io_id < 0) return
+  if (my_io_id + 1 > size(io_nproc_all)) return
+
+  io_local_compute_count = io_nproc_all(my_io_id+1)
+
+  end function io_local_compute_count
+
+  subroutine build_io_assignment_mask(assigned_to_this_io)
+
+  use specfem_par, only: NPROCTOT_VAL
+
+  implicit none
+
+  logical, dimension(0:NPROCTOT_VAL-1), intent(out) :: assigned_to_this_io
+  integer :: i, comp_rank, local_count
+
+  assigned_to_this_io = .false.
+
+  if (HDF5_IO_NODES <= 1) then
+    assigned_to_this_io = .true.
+    return
+  endif
+
+  if (.not. allocated(io_compute_ranks)) return
+
+  local_count = io_local_compute_count()
+  if (local_count <= 0) return
+
+  do i = 1, local_count
+    comp_rank = io_compute_ranks(my_io_id+1,i)
+    if (comp_rank >= 0 .and. comp_rank < NPROCTOT_VAL) then
+      assigned_to_this_io(comp_rank) = .true.
+    endif
+  enddo
+
+  end subroutine build_io_assignment_mask
+
+  subroutine zero_unassigned_offsets(offsets, assigned_to_this_io)
+
+  implicit none
+
+  integer, dimension(0:), intent(inout) :: offsets
+  logical, dimension(0:), intent(in) :: assigned_to_this_io
+  integer :: rank_id
+
+  do rank_id = 0, ubound(offsets,1)
+    if (.not. assigned_to_this_io(rank_id)) offsets(rank_id) = 0
+  enddo
+
+  end subroutine zero_unassigned_offsets
+
+  subroutine apply_local_io_partition_to_undo_offsets()
+
+  use specfem_par, only: NPROCTOT_VAL
+  use specfem_par_movie_hdf5
+
+  implicit none
+
+  logical, dimension(0:NPROCTOT_VAL-1) :: assigned_to_this_io
+
+  if (HDF5_IO_NODES <= 1) return
+  if (.not. IO_storage_task) return
+
+  call build_io_assignment_mask(assigned_to_this_io)
+
+  call zero_unassigned_offsets(offset_nglob_cm, assigned_to_this_io)
+  call zero_unassigned_offsets(offset_nglob_oc, assigned_to_this_io)
+  call zero_unassigned_offsets(offset_nglob_ic, assigned_to_this_io)
+  call zero_unassigned_offsets(offset_nspec_cm_soa, assigned_to_this_io)
+  call zero_unassigned_offsets(offset_nspec_ic_soa, assigned_to_this_io)
+
+  if (ROTATION_VAL) then
+    call zero_unassigned_offsets(offset_nspec_oc_rot, assigned_to_this_io)
+  endif
+  if (ATTENUATION_VAL) then
+    call zero_unassigned_offsets(offset_nspec_cm_att, assigned_to_this_io)
+    call zero_unassigned_offsets(offset_nspec_ic_att, assigned_to_this_io)
+  endif
+  if (FULL_GRAVITY_VAL) then
+    call zero_unassigned_offsets(offset_pgrav1, assigned_to_this_io)
+  endif
+
+  npoints_vol_mov_all_proc_cm = sum(offset_nglob_cm)
+  npoints_vol_mov_all_proc_oc = sum(offset_nglob_oc)
+  npoints_vol_mov_all_proc_ic = sum(offset_nglob_ic)
+  nspec_vol_mov_all_proc_cm_soa = sum(offset_nspec_cm_soa)
+  nspec_vol_mov_all_proc_ic_soa = sum(offset_nspec_ic_soa)
+
+  if (ROTATION_VAL) then
+    nspec_vol_mov_all_proc_oc_rot = sum(offset_nspec_oc_rot)
+  endif
+  if (ATTENUATION_VAL) then
+    nspec_vol_mov_all_proc_cm_att = sum(offset_nspec_cm_att)
+    nspec_vol_mov_all_proc_ic_att = sum(offset_nspec_ic_att)
+  endif
+
+  if (VERBOSE) then
+    print *, 'io_server: rank ', myrank, ' io shard ', my_io_id, &
+             ' local undo/nglob totals = ', npoints_vol_mov_all_proc_cm, &
+             npoints_vol_mov_all_proc_oc, npoints_vol_mov_all_proc_ic
+    call flush_stdout()
+  endif
+
+  end subroutine apply_local_io_partition_to_undo_offsets
+
+  subroutine apply_local_io_partition_to_surface_offsets()
+
+  use specfem_par, only: NPROCTOT_VAL
+  use specfem_par_movie_hdf5
+
+  implicit none
+
+  logical, dimension(0:NPROCTOT_VAL-1) :: assigned_to_this_io
+
+  if (HDF5_IO_NODES <= 1) return
+  if (.not. IO_storage_task) return
+  if (.not. allocated(offset_poin)) return
+
+  call build_io_assignment_mask(assigned_to_this_io)
+  call zero_unassigned_offsets(offset_poin, assigned_to_this_io)
+
+  npoints_surf_mov_all_proc = sum(offset_poin)
+
+  if (VERBOSE) then
+    print *, 'io_server: rank ', myrank, ' io shard ', my_io_id, &
+             ' local surface points = ', npoints_surf_mov_all_proc
+    call flush_stdout()
+  endif
+
+  end subroutine apply_local_io_partition_to_surface_offsets
+
+  subroutine apply_local_io_partition_to_volume_offsets()
+
+  use specfem_par, only: NPROCTOT_VAL
+  use specfem_par_movie_hdf5
+
+  implicit none
+
+  logical, dimension(0:NPROCTOT_VAL-1) :: assigned_to_this_io
+
+  if (HDF5_IO_NODES <= 1) return
+  if (.not. IO_storage_task) return
+  if (.not. allocated(offset_poin_vol)) return
+
+  call build_io_assignment_mask(assigned_to_this_io)
+  call zero_unassigned_offsets(offset_poin_vol, assigned_to_this_io)
+
+  npoints_vol_mov_all_proc = sum(offset_poin_vol)
+
+  if (VERBOSE) then
+    print *, 'io_server: rank ', myrank, ' io shard ', my_io_id, &
+             ' local volume points = ', npoints_vol_mov_all_proc
+    call flush_stdout()
+  endif
+
+  end subroutine apply_local_io_partition_to_volume_offsets
+
+  subroutine pack_local_int_values(global_values, local_values)
+
+  use specfem_par, only: NPROCTOT_VAL
+
+  implicit none
+
+  integer, dimension(0:), intent(in) :: global_values
+  integer, dimension(:), intent(out) :: local_values
+  integer :: i, comp_rank, local_count
+
+  local_values = 0
+
+  if (HDF5_IO_NODES <= 1) then
+    local_count = min(size(local_values), size(global_values))
+    if (local_count > 0) local_values(1:local_count) = global_values(0:local_count-1)
+    return
+  endif
+
+  if (.not. allocated(io_compute_ranks)) return
+
+  local_count = min(size(local_values), io_local_compute_count())
+  if (local_count <= 0) return
+
+  do i = 1, local_count
+    comp_rank = io_compute_ranks(my_io_id+1,i)
+    if (comp_rank >= 0 .and. comp_rank < NPROCTOT_VAL) then
+      local_values(i) = global_values(comp_rank)
+    endif
+  enddo
+
+  end subroutine pack_local_int_values
+
 #endif
 
 !
@@ -1715,6 +1918,15 @@ contains
     NSUBSET_ITERATIONS = 0
   endif ! UNDO_ATTENUATION and SAVE_FORWARD
 
+  if (MOVIE_VOLUME .and. MOVIE_VOLUME_TYPE >= 7 .and. MOVIE_VOLUME_TYPE <= 9) then
+    if (.not. (UNDO_ATTENUATION .and. SAVE_FORWARD)) then
+      call recv_i_inter(offset_nglob_cm, NPROCTOT_VAL, 0, io_tag_ford_undo_d_cm)
+      call recv_i_inter(offset_nglob_oc, NPROCTOT_VAL, 0, io_tag_ford_undo_d_oc)
+      call recv_i_inter(offset_nglob_ic, NPROCTOT_VAL, 0, io_tag_ford_undo_d_ic)
+    endif
+    call apply_local_io_partition_to_undo_offsets()
+  endif
+
   ! surface movie metadata
   if (MOVIE_SURFACE) then
 
@@ -1727,6 +1939,8 @@ contains
     call recv_i_inter(offset_poin, NPROCTOT_VAL, 0, io_tag_surf_offset)
     call recv_i_inter(tmp_arr, 1, 0, io_tag_surf_npoints)
     npoints_surf_mov_all_proc = tmp_arr(1)
+
+    call apply_local_io_partition_to_surface_offsets()
 
   endif
 
@@ -1750,6 +1964,8 @@ contains
     call recv_i_inter(offset_poin_vol, NPROCTOT_VAL, 0, io_tag_vol_offset)
     call recv_i_inter(tmp_arr, 1, 0, io_tag_vol_npoints)
     npoints_vol_mov_all_proc = tmp_arr(1)
+
+    call apply_local_io_partition_to_volume_offsets()
 
   endif
 
@@ -1834,6 +2050,16 @@ contains
       endif ! myrank == 0
 
     endif ! UNDO_ATTENUATION .and. SAVE_FORWARD
+
+    if (MOVIE_VOLUME .and. MOVIE_VOLUME_TYPE >= 7 .and. MOVIE_VOLUME_TYPE <= 9) then
+      if (myrank == 0 .and. .not. (UNDO_ATTENUATION .and. SAVE_FORWARD)) then
+        do i_ionod = 0, HDF5_IO_NODES-1
+          call send_i_inter(offset_nglob_cm, NPROCTOT_VAL, i_ionod, io_tag_ford_undo_d_cm)
+          call send_i_inter(offset_nglob_oc, NPROCTOT_VAL, i_ionod, io_tag_ford_undo_d_oc)
+          call send_i_inter(offset_nglob_ic, NPROCTOT_VAL, i_ionod, io_tag_ford_undo_d_ic)
+        enddo
+      endif
+    endif
 
     ! surface movie metadata
     if (MOVIE_SURFACE) then
@@ -2504,7 +2730,12 @@ contains
   case (UNDO_BUFFER_INT1D)
     if (associated(desc%dest_int)) then
       rank = 1
-      dims(1) = size(desc%dest_int)
+      if (HDF5_IO_NODES > 1 .and. IO_storage_task) then
+        dims(1) = io_local_compute_count()
+      else
+        dims(1) = size(desc%dest_int)
+      endif
+      if (dims(1) <= 0) rank = 0
     endif
   case default
     rank = 0
@@ -2588,6 +2819,7 @@ contains
   integer :: start_idx(5)
   integer :: num_elements
   integer :: elem_size
+  integer, allocatable :: packed_int(:)
 
   if (.not. descriptor_has_data(desc)) return
 
@@ -2607,7 +2839,14 @@ contains
   case (UNDO_BUFFER_REAL5D)
     call h5_write_dataset_collect_hyperslab(trim(desc%dataset_name), desc%dest_real5, start_idx(1:rank), use_collective)
   case (UNDO_BUFFER_INT1D)
-    call h5_write_dataset_collect_hyperslab(trim(desc%dataset_name), desc%dest_int, start_idx(1:rank), use_collective)
+    if (HDF5_IO_NODES > 1 .and. IO_storage_task) then
+      allocate(packed_int(dims(1)))
+      call pack_local_int_values(desc%dest_int, packed_int)
+      call h5_write_dataset_collect_hyperslab(trim(desc%dataset_name), packed_int, start_idx(1:rank), use_collective)
+      deallocate(packed_int)
+    else
+      call h5_write_dataset_collect_hyperslab(trim(desc%dataset_name), desc%dest_int, start_idx(1:rank), use_collective)
+    endif
   case default
     call stop_timer()
     return
