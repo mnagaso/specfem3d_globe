@@ -930,7 +930,8 @@ contains
 
   subroutine apply_local_io_partition_to_undo_offsets()
 
-  use specfem_par, only: NPROCTOT_VAL
+  use specfem_par, only: ATTENUATION_VAL, FULL_GRAVITY_VAL, NPROCTOT_VAL, &
+                         ROTATION_VAL, myrank
   use specfem_par_movie_hdf5
 
   implicit none
@@ -984,7 +985,7 @@ contains
 
   subroutine apply_local_io_partition_to_surface_offsets()
 
-  use specfem_par, only: NPROCTOT_VAL
+  use specfem_par, only: NPROCTOT_VAL, myrank
   use specfem_par_movie_hdf5
 
   implicit none
@@ -1010,7 +1011,7 @@ contains
 
   subroutine apply_local_io_partition_to_volume_offsets()
 
-  use specfem_par, only: NPROCTOT_VAL
+  use specfem_par, only: NPROCTOT_VAL, myrank
   use specfem_par_movie_hdf5
 
   implicit none
