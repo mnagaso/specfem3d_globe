@@ -16,7 +16,7 @@ import argparse
 import pathlib
 import re
 import sys
-from typing import Iterable, List, Match, Optional, Sequence, Set
+from typing import Iterable, List, Match, Optional, Sequence, Set, Tuple
 
 
 RANK_LINE_RE = re.compile(
@@ -62,12 +62,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--in-place",
         action="store_true",
-        help="Overwrite the input files instead of writing '*.fixed' siblings.",
+        help="Deprecated. In-place writes are disabled to preserve the original logs.",
     )
     parser.add_argument(
         "--suffix",
-        default=".fixed",
-        help="Suffix to append when not writing in place. Default: '.fixed'.",
+        default="_mod",
+        help=(
+            "Suffix inserted before the original file extension. "
+            "Default: '_mod' (for example io_band_0.txt -> io_band_0_mod.txt)."
+        ),
+    )
+    parser.add_argument(
+        "--skip-empty",
+        action="store_true",
+        help=(
+            "Skip empty or whitespace-only input logs instead of failing. "
+            "Skipped files are left untouched."
+        ),
     )
     return parser.parse_args()
 
@@ -167,14 +178,47 @@ def fix_log_contents(text: str, io_nodes: int, weights: Sequence[float]) -> str:
     return "\n".join(fixed_lines) + trailing_newline
 
 
-def output_path(input_path: pathlib.Path, in_place: bool, suffix: str) -> pathlib.Path:
-    if in_place:
-        return input_path
+def output_path(input_path: pathlib.Path, suffix: str) -> pathlib.Path:
+    if input_path.suffix:
+        return input_path.with_name(f"{input_path.stem}{suffix}{input_path.suffix}")
     return input_path.with_name(input_path.name + suffix)
+
+
+def build_fix_plan(
+    files: Sequence[pathlib.Path],
+    io_nodes: int,
+    weights: Sequence[float],
+    skip_empty: bool,
+) -> Tuple[List[Tuple[pathlib.Path, str]], List[pathlib.Path]]:
+    plan = []  # type: List[Tuple[pathlib.Path, str]]
+    skipped_empty = []  # type: List[pathlib.Path]
+
+    for file_path in files:
+        original_text = file_path.read_text(encoding="utf-8")
+        if not original_text.strip():
+            if skip_empty:
+                skipped_empty.append(file_path)
+                continue
+            raise ValueError(
+                f"encountered empty io_band log: {file_path}; "
+                "rerun with --skip-empty to leave it untouched"
+            )
+
+        fixed_text = fix_log_contents(original_text, io_nodes, weights)
+        plan.append((file_path, fixed_text))
+
+    return plan, skipped_empty
 
 
 def main() -> int:
     args = parse_args()
+
+    if args.in_place:
+        print(
+            "error: in-place writes are disabled; use the generated *_mod.txt sibling files",
+            file=sys.stderr,
+        )
+        return 2
 
     try:
         weights = normalize_weights(args.io_nodes, args.weights)
@@ -192,12 +236,21 @@ def main() -> int:
         print("error: no io_band_*.txt files found", file=sys.stderr)
         return 2
 
-    for file_path in files:
-        original_text = file_path.read_text(encoding="utf-8")
-        fixed_text = fix_log_contents(original_text, args.io_nodes, weights)
-        destination = output_path(file_path, args.in_place, args.suffix)
+    try:
+        plan, skipped_empty = build_fix_plan(
+            files, args.io_nodes, weights, args.skip_empty
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    for file_path, fixed_text in plan:
+        destination = output_path(file_path, args.suffix)
         destination.write_text(fixed_text, encoding="utf-8")
         print(f"wrote {destination}")
+
+    for file_path in skipped_empty:
+        print(f"skipped empty {file_path}", file=sys.stderr)
 
     return 0
 
