@@ -35,6 +35,8 @@
   use specfem_par_full_gravity
 
 #ifdef USE_HDF5
+  use io_bandwidth, only: initialize_bytes_written,start_timer,stop_timer, &
+                          set_bytes_written_from_array,calculate_bandwidth_all_procs
   use manager_hdf5
   use specfem_par_movie_hdf5
 #endif
@@ -122,6 +124,9 @@
 
     call synchronize_all()
 
+    call initialize_bytes_written()
+    call start_timer()
+
     ! write data from all ranks
     if (H5_COL) then
       ! open file
@@ -201,6 +206,53 @@
     ! close file
     call h5_close_file_p()
 
+    call stop_timer()
+    call set_bytes_written_from_array(storage_size(displ_crust_mantle), size(displ_crust_mantle))
+    call set_bytes_written_from_array(storage_size(veloc_crust_mantle), size(veloc_crust_mantle))
+    call set_bytes_written_from_array(storage_size(accel_crust_mantle), size(accel_crust_mantle))
+    call set_bytes_written_from_array(storage_size(displ_outer_core), size(displ_outer_core))
+    call set_bytes_written_from_array(storage_size(veloc_outer_core), size(veloc_outer_core))
+    call set_bytes_written_from_array(storage_size(accel_outer_core), size(accel_outer_core))
+    call set_bytes_written_from_array(storage_size(displ_inner_core), size(displ_inner_core))
+    call set_bytes_written_from_array(storage_size(veloc_inner_core), size(veloc_inner_core))
+    call set_bytes_written_from_array(storage_size(accel_inner_core), size(accel_inner_core))
+    call set_bytes_written_from_array(storage_size(epsilondev_xx_crust_mantle), size(epsilondev_xx_crust_mantle))
+    call set_bytes_written_from_array(storage_size(epsilondev_yy_crust_mantle), size(epsilondev_yy_crust_mantle))
+    call set_bytes_written_from_array(storage_size(epsilondev_xy_crust_mantle), size(epsilondev_xy_crust_mantle))
+    call set_bytes_written_from_array(storage_size(epsilondev_xz_crust_mantle), size(epsilondev_xz_crust_mantle))
+    call set_bytes_written_from_array(storage_size(epsilondev_yz_crust_mantle), size(epsilondev_yz_crust_mantle))
+    call set_bytes_written_from_array(storage_size(epsilondev_xx_inner_core), size(epsilondev_xx_inner_core))
+    call set_bytes_written_from_array(storage_size(epsilondev_yy_inner_core), size(epsilondev_yy_inner_core))
+    call set_bytes_written_from_array(storage_size(epsilondev_xy_inner_core), size(epsilondev_xy_inner_core))
+    call set_bytes_written_from_array(storage_size(epsilondev_xz_inner_core), size(epsilondev_xz_inner_core))
+    call set_bytes_written_from_array(storage_size(epsilondev_yz_inner_core), size(epsilondev_yz_inner_core))
+
+    if (ROTATION_VAL) then
+      call set_bytes_written_from_array(storage_size(A_array_rotation), size(A_array_rotation))
+      call set_bytes_written_from_array(storage_size(B_array_rotation), size(B_array_rotation))
+    endif
+
+    if (ATTENUATION_VAL) then
+      call set_bytes_written_from_array(storage_size(R_xx_crust_mantle), size(R_xx_crust_mantle))
+      call set_bytes_written_from_array(storage_size(R_yy_crust_mantle), size(R_yy_crust_mantle))
+      call set_bytes_written_from_array(storage_size(R_xy_crust_mantle), size(R_xy_crust_mantle))
+      call set_bytes_written_from_array(storage_size(R_xz_crust_mantle), size(R_xz_crust_mantle))
+      call set_bytes_written_from_array(storage_size(R_yz_crust_mantle), size(R_yz_crust_mantle))
+      call set_bytes_written_from_array(storage_size(R_xx_inner_core), size(R_xx_inner_core))
+      call set_bytes_written_from_array(storage_size(R_yy_inner_core), size(R_yy_inner_core))
+      call set_bytes_written_from_array(storage_size(R_xy_inner_core), size(R_xy_inner_core))
+      call set_bytes_written_from_array(storage_size(R_xz_inner_core), size(R_xz_inner_core))
+      call set_bytes_written_from_array(storage_size(R_yz_inner_core), size(R_yz_inner_core))
+    endif
+
+    if (FULL_GRAVITY_VAL) then
+      call set_bytes_written_from_array(8 * CUSTOM_REAL, 1)
+      call set_bytes_written_from_array(8 * CUSTOM_REAL, 1)
+      call set_bytes_written_from_array(storage_size(pgrav1), size(pgrav1))
+    endif
+
+    call calculate_bandwidth_all_procs()
+
   endif ! HDF5_IO_NODES == 0
 
 #else
@@ -226,6 +278,8 @@
   use specfem_par_full_gravity
 
 #ifdef USE_HDF5
+  use io_bandwidth, only: initialize_bytes_written,start_timer,stop_timer, &
+                          set_bytes_written_from_array,calculate_bandwidth_all_procs
   use manager_hdf5
   use specfem_par_movie_hdf5
 #endif
@@ -315,6 +369,9 @@
 
     call synchronize_all()
 
+    call initialize_bytes_written()
+    call start_timer()
+
     ! write data from all ranks
     if (H5_COL) then
       ! open file
@@ -391,6 +448,53 @@
 
     ! close file
     call h5_close_file_p()
+
+    call stop_timer()
+    call set_bytes_written_from_array(storage_size(displ_crust_mantle), size(displ_crust_mantle))
+    call set_bytes_written_from_array(storage_size(veloc_crust_mantle), size(veloc_crust_mantle))
+    call set_bytes_written_from_array(storage_size(accel_crust_mantle), size(accel_crust_mantle))
+    call set_bytes_written_from_array(storage_size(displ_outer_core), size(displ_outer_core))
+    call set_bytes_written_from_array(storage_size(veloc_outer_core), size(veloc_outer_core))
+    call set_bytes_written_from_array(storage_size(accel_outer_core), size(accel_outer_core))
+    call set_bytes_written_from_array(storage_size(displ_inner_core), size(displ_inner_core))
+    call set_bytes_written_from_array(storage_size(veloc_inner_core), size(veloc_inner_core))
+    call set_bytes_written_from_array(storage_size(accel_inner_core), size(accel_inner_core))
+    call set_bytes_written_from_array(storage_size(epsilondev_xx_crust_mantle), size(epsilondev_xx_crust_mantle))
+    call set_bytes_written_from_array(storage_size(epsilondev_yy_crust_mantle), size(epsilondev_yy_crust_mantle))
+    call set_bytes_written_from_array(storage_size(epsilondev_xy_crust_mantle), size(epsilondev_xy_crust_mantle))
+    call set_bytes_written_from_array(storage_size(epsilondev_xz_crust_mantle), size(epsilondev_xz_crust_mantle))
+    call set_bytes_written_from_array(storage_size(epsilondev_yz_crust_mantle), size(epsilondev_yz_crust_mantle))
+    call set_bytes_written_from_array(storage_size(epsilondev_xx_inner_core), size(epsilondev_xx_inner_core))
+    call set_bytes_written_from_array(storage_size(epsilondev_yy_inner_core), size(epsilondev_yy_inner_core))
+    call set_bytes_written_from_array(storage_size(epsilondev_xy_inner_core), size(epsilondev_xy_inner_core))
+    call set_bytes_written_from_array(storage_size(epsilondev_xz_inner_core), size(epsilondev_xz_inner_core))
+    call set_bytes_written_from_array(storage_size(epsilondev_yz_inner_core), size(epsilondev_yz_inner_core))
+
+    if (ROTATION_VAL) then
+      call set_bytes_written_from_array(storage_size(A_array_rotation), size(A_array_rotation))
+      call set_bytes_written_from_array(storage_size(B_array_rotation), size(B_array_rotation))
+    endif
+
+    if (ATTENUATION_VAL) then
+      call set_bytes_written_from_array(storage_size(R_xx_crust_mantle), size(R_xx_crust_mantle))
+      call set_bytes_written_from_array(storage_size(R_yy_crust_mantle), size(R_yy_crust_mantle))
+      call set_bytes_written_from_array(storage_size(R_xy_crust_mantle), size(R_xy_crust_mantle))
+      call set_bytes_written_from_array(storage_size(R_xz_crust_mantle), size(R_xz_crust_mantle))
+      call set_bytes_written_from_array(storage_size(R_yz_crust_mantle), size(R_yz_crust_mantle))
+      call set_bytes_written_from_array(storage_size(R_xx_inner_core), size(R_xx_inner_core))
+      call set_bytes_written_from_array(storage_size(R_yy_inner_core), size(R_yy_inner_core))
+      call set_bytes_written_from_array(storage_size(R_xy_inner_core), size(R_xy_inner_core))
+      call set_bytes_written_from_array(storage_size(R_xz_inner_core), size(R_xz_inner_core))
+      call set_bytes_written_from_array(storage_size(R_yz_inner_core), size(R_yz_inner_core))
+    endif
+
+    if (FULL_GRAVITY_VAL) then
+      call set_bytes_written_from_array(8 * CUSTOM_REAL, 1)
+      call set_bytes_written_from_array(8 * CUSTOM_REAL, 1)
+      call set_bytes_written_from_array(storage_size(pgrav1), size(pgrav1))
+    endif
+
+    call calculate_bandwidth_all_procs()
 
 #else
 

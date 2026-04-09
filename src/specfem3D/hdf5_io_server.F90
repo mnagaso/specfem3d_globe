@@ -1914,6 +1914,10 @@ contains
     ! build ordered tag list for undo-attenuation messages
     call build_undo_tag_list()
 
+    ! In shard mode, each IO rank must reduce undo offsets to its assigned
+    ! compute ranks before buffer sizing and dataset creation.
+    call apply_local_io_partition_to_undo_offsets()
+
   else
     n_msg_ford_undo = 0
     NSUBSET_ITERATIONS = 0
@@ -1924,8 +1928,8 @@ contains
       call recv_i_inter(offset_nglob_cm, NPROCTOT_VAL, 0, io_tag_ford_undo_d_cm)
       call recv_i_inter(offset_nglob_oc, NPROCTOT_VAL, 0, io_tag_ford_undo_d_oc)
       call recv_i_inter(offset_nglob_ic, NPROCTOT_VAL, 0, io_tag_ford_undo_d_ic)
+      call apply_local_io_partition_to_undo_offsets()
     endif
-    call apply_local_io_partition_to_undo_offsets()
   endif
 
   ! surface movie metadata
