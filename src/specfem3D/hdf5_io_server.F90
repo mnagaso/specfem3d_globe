@@ -4146,7 +4146,9 @@ contains
 
     if (element_bytes == 0) element_bytes = CUSTOM_REAL
 
-    call set_bytes_written_from_array(element_bytes*8, msg_size) ! converting to bits from bytes
+    ! Undo-snapshot bytes are accounted when the buffered descriptors are flushed
+    ! to HDF5 in write_descriptor_dataset(). Counting them here would double count
+    ! every buffered message in the IO-server path.
 
   end subroutine recv_and_write_ford_undo
 
