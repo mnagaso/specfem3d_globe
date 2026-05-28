@@ -41,6 +41,7 @@
 
   ! timing
   double precision, external :: wtime
+  integer :: it_timing_begin
 
   ! for EXACT_UNDOING_TO_DISK
   integer :: ispec,iglob,i,j,k
@@ -99,6 +100,7 @@
 
   ! get MPI starting time
   call timing_reset()
+  it_timing_begin = it_begin
   time_start = wtime()
 
   ! *********************************************************
@@ -270,6 +272,13 @@
     endif
     call timing_io_stop()
 
+    ! periodic timing record (every NTSTEP_BETWEEN_OUTPUT_INFO steps and at the end)
+    if (mod(it, NTSTEP_BETWEEN_OUTPUT_INFO) == 0 .or. it == it_end) then
+      call timing_report(myrank, mygroup, .false., it_timing_begin, it)
+      call timing_reset()
+      it_timing_begin = it + 1
+    endif
+
     ! updates VTK window
     if (VTK_MODE) then
       call it_update_vtkwindow()
@@ -296,9 +305,6 @@
 
   ! close the huge file that contains a dump of all the time steps to disk
   if (EXACT_UNDOING_TO_DISK) call finish_exact_undoing_to_disk()
-
-  ! user output of timing accounting (no barriers)
-  call timing_report(myrank, mygroup, .false., wtime() - time_start)
 
   ! user output of runtime
   call print_elapsed_time()

@@ -1735,6 +1735,10 @@ contains
           print *, 'io_server: completed undo iteration ', ford_undo_out_count, '/', max_ford_undo_out
         endif
 
+        ! periodic timing record: one record per undo snapshot
+        call timing_report(myrank, mygroup, .true., ford_undo_out_count, ford_undo_out_count)
+        call timing_reset()
+
         ! write out the times
         call calculate_bandwidth_all_procs()
 
@@ -1796,8 +1800,8 @@ contains
   ! END OF MAIN IDLING LOOP
   !---------------------------------------------------------------------------
 
-  ! timing accounting report for IO node (no barriers)
-  call timing_report(myrank, mygroup, .true., MPI_Wtime() - io_time_start)
+  ! timing accounting: final residual interval (movie-only time after last undo snapshot)
+  call timing_report(myrank, mygroup, .true., 0, 0)
 
   call calculate_bandwidth_all_procs()
 

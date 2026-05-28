@@ -36,6 +36,9 @@ module timing_accounting
   double precision :: t_wait_start    = 0.0d0
   double precision :: t_idle_start    = 0.0d0
 
+  ! interval wall-clock start (set by timing_reset)
+  double precision :: t_interval_start = 0.0d0
+
 contains
 
   subroutine timing_reset()
@@ -43,6 +46,7 @@ contains
     time_io      = 0.0d0
     time_wait_io = 0.0d0
     time_idle_io = 0.0d0
+    t_interval_start = MPI_Wtime()
   end subroutine timing_reset
 
   ! ---- compute timing ----
@@ -82,11 +86,19 @@ contains
   end subroutine timing_idle_stop
 
   ! ---- reporting (no MPI barriers) ----
-  subroutine timing_report(rank, group, is_io_node, total_elapsed)
+  !
+  ! Writes one line per call to a per-rank file.
+  ! Called periodically (e.g. once per undo-attenuation subset) so that
+  ! performance variation across the simulation can be observed.
+  !
+  ! it_start / it_end : iteration range covered by this interval
+  !                     (for IO-server nodes, use subset index or 0)
+  !
+  subroutine timing_report(rank, group, is_io_node, it_start, it_end)
     implicit none
     integer, intent(in) :: rank, group
     logical, intent(in) :: is_io_node
-    double precision, intent(in) :: total_elapsed
+    integer, intent(in) :: it_start, it_end
 
     integer :: unit_number, ierr
     character(len=80) :: filename
@@ -95,7 +107,11 @@ contains
     character(len=8)  :: date_str
     character(len=10) :: time_str
     character(len=16) :: role_str
-    double precision :: time_other, current_time
+    double precision :: time_other, total_elapsed, current_time
+
+    ! interval elapsed time (from last timing_reset)
+    current_time = MPI_Wtime()
+    total_elapsed = current_time - t_interval_start
 
     ! compute unaccounted time
     time_other = total_elapsed - time_compute - time_io - time_wait_io - time_idle_io
@@ -115,8 +131,7 @@ contains
                '_' // trim(adjustl(role_str)) // &
                '_rank' // trim(adjustl(rank_str)) // '.txt'
 
-    ! get current wall-clock and date for the log entry
-    current_time = MPI_Wtime()
+    ! date for the log entry
     call date_and_time(date=date_str, time=time_str)
 
     ! each rank writes exclusively to its own file (no contention, no barriers)
@@ -127,8 +142,10 @@ contains
       return
     endif
 
-    write(unit_number, '(A,I0,A,I0,A,A,A,F14.6,A,F14.6,A,F14.6,A,F14.6,A,F14.6,A,F14.6,A,F24.12,A,A,A,A)') &
-      'mygroup: ', group, &
+    write(unit_number, '(A,I0,A,I0,A,I0,A,I0,A,A,A,F14.6,A,F14.6,A,F14.6,A,F14.6,A,F14.6,A,F14.6,A,F24.12,A,A,A,A)') &
+      'it_begin: ', it_start, &
+      ', it_end: ', it_end, &
+      ', mygroup: ', group, &
       ', myrank: ', rank, &
       ', role: ', trim(role_str), &
       ', compute (s): ', time_compute, &

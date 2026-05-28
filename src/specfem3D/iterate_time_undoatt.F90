@@ -44,6 +44,7 @@
   integer :: it_temp,seismo_current_temp
   integer :: ier
   integer :: buffer_size, it_of_buffer, ntstep_kl
+  integer :: it_timing_begin
   real(kind=CUSTOM_REAL), dimension(:,:,:), allocatable :: b_displ_cm_store_buffer
   real(kind=CUSTOM_REAL), dimension(:,:,:), allocatable :: b_displ_ic_store_buffer
   real(kind=CUSTOM_REAL), dimension(:,:), allocatable :: b_displ_oc_store_buffer,b_accel_oc_store_buffer
@@ -268,6 +269,7 @@
 
   ! get MPI starting time
   call timing_reset()
+  it_timing_begin = it_begin
   time_start = wtime()
 
   ! *********************************************************
@@ -339,10 +341,17 @@
     200 continue
 
     it = it - 1
+
+    ! record steady-state interval timing
+    call timing_report(myrank, mygroup, .false., it_timing_begin, it)
+    call timing_reset()
   endif
 
   ! loops over time subsets
   do iteration_on_subset = 1, NSUBSET_ITERATIONS
+
+    ! track iteration range for this subset
+    it_timing_begin = it + 1
 
     ! wavefield storage
     if (SIMULATION_TYPE == 1 .and. SAVE_FORWARD) then
@@ -656,6 +665,10 @@
 
     end select ! SIMULATION_TYPE
 
+    ! record timing for this subset interval
+    call timing_report(myrank, mygroup, .false., it_timing_begin, it)
+    call timing_reset()
+
   !
   !---- end of time iteration loop
   !
@@ -689,9 +702,6 @@
 
   ! close the huge file that contains a dump of all the time steps to disk
   if (EXACT_UNDOING_TO_DISK) call finish_exact_undoing_to_disk()
-
-  ! user output of timing accounting (no barriers)
-  call timing_report(myrank, mygroup, .false., wtime() - time_start)
 
   ! user output of runtime
   call print_elapsed_time()

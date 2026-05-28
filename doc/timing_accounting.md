@@ -4,11 +4,38 @@
 
 `src/specfem3D/timing_accounting.F90` provides a barrier-free, per-process wall-clock
 timing breakdown for the solver time loop. Each MPI rank independently accumulates time
-into four categories and writes a one-line report at the end of the simulation.
+into four categories and writes periodic reports — one line per undo-attenuation subset
+(or per `NTSTEP_BETWEEN_OUTPUT_INFO` steps for non-undoatt runs).
 
 The design constraint is **zero synchronization barriers**: all timing is done with
 `MPI_Wtime()` calls local to each process, so the measurement itself has no impact on
 parallel efficiency or on the phenomena being measured.
+
+### Recording intervals
+
+The timing is recorded **periodically** rather than as a single accumulated total:
+
+**`iterate_time_undoatt.F90` (undo-attenuation):**
+```
+subset 1: checkpoint IO + compute it=1..NT_DUMP_ATTENUATION  → record, reset
+subset 2: checkpoint IO + compute it=N+1..2N                 → record, reset
+...
+subset K: checkpoint IO + compute it=...NSTEP                → record, reset
+```
+
+**`iterate_time.F90` (no undo-attenuation):**
+```
+every NTSTEP_BETWEEN_OUTPUT_INFO steps → record, reset
+final step                            → record, reset
+```
+
+**IO server (`hdf5_io_server.F90`):**
+```
+after each undo snapshot write → record, reset
+final (residual after last snapshot) → record
+```
+
+Each record line shows `it_begin` and `it_end` to identify the iteration range covered.
 
 ---
 
@@ -37,12 +64,22 @@ The files are written to the simulation working directory (same directory as
 
 ## Output columns
 
-Each file contains a single line:
+Each file contains **one line per interval** (multiple lines per simulation):
 
 ```
-mygroup: G, myrank: R, role: ROLE, compute (s): C, io (s): I, wait_io (s): W,
-idle_io (s): D, other (s): O, total (s): T, mpi_wtime (s): E, date: DATE, time: TIME
+it_begin: B, it_end: E, mygroup: G, myrank: R, role: ROLE, compute (s): C,
+io (s): I, wait_io (s): W, idle_io (s): D, other (s): O, total (s): T,
+mpi_wtime (s): E, date: DATE, time: TIME
 ```
+
+### `it_begin`, `it_end`
+
+The iteration range covered by this record.
+
+- **Compute ranks**: timestep numbers (e.g. `it_begin: 1, it_end: 100` for
+  the first subset of 100 steps).
+- **IO server ranks**: undo snapshot index (e.g. `it_begin: 1, it_end: 1`
+  for the first snapshot). The final residual record uses `it_begin: 0, it_end: 0`.
 
 ### `compute (s)`
 
@@ -190,13 +227,13 @@ operations outside the timed regions, and the seismogram flush at the end of the
 
 ### `total (s)`
 
-`wtime() - time_start` measured from just before the main time loop to just after it
-exits. Matches the value printed by `print_elapsed_time()`.
+Wall-clock elapsed time for this interval, measured from the last `timing_reset()` to
+the `timing_report()` call. The sum of all intervals' `total` values equals the overall
+simulation wall-clock time.
 
-**Source — `iterate_time_undoatt.F90` (line ~694):**
+**Source — `timing_accounting.F90`:**
 ```fortran
-call timing_report(myrank, mygroup, .false., wtime() - time_start)
-call print_elapsed_time()
+total_elapsed = MPI_Wtime() - t_interval_start   ! t_interval_start set by timing_reset()
 ```
 
 ---
@@ -211,105 +248,52 @@ log entries and correlating with system-level profiling traces.
 
 ## Example results
 
-**System**: Fugaku (Fujitsu A64FX), 1 node, 1 chunk  
-**Example**: `EXAMPLES/regional_Greece_small_LDDRK`  
-**Settings**: `NCHUNKS=1`, `NPROC_XI=2`, `NPROC_ETA=2`, `NSTEP=700`,
-`UNDO_ATTENUATION=.true.`, `SIMULATION_TYPE=1`
+Test configuration: `regional_Greece_small_LDDRK` example on Fugaku (A64FX),
+`NCHUNKS=1`, `NPROC_XI=2`, `NPROC_ETA=2`, `NSTEP=700`, `UNDO_ATTENUATION=.true.`,
+`SIMULATION_TYPE=1`. `NT_DUMP_ATTENUATION_VAL=1802` (computed by mesher), so the
+entire run fits in a single undo-attenuation subset (1 record per rank).
 
-### Case 1 — `HDF5_IO_NODES = 0` (standard binary IO, 4 compute ranks)
-
-```
-timing_acct_group-1_compute_rank0.txt:
-  mygroup: -1, myrank: 0, role: compute,
-    compute (s):   262.113682,  io (s):   9.274764,
-    wait_io (s):     0.000000,  idle_io (s):   0.000000,
-    other (s):       0.114510,  total (s): 271.502956
-
-timing_acct_group-1_compute_rank1.txt:
-  mygroup: -1, myrank: 1, role: compute,
-    compute (s):   261.976416,  io (s):   9.444544,
-    wait_io (s):     0.000000,  idle_io (s):   0.000000,
-    other (s):       0.049303,  total (s): 271.470263
-
-timing_acct_group-1_compute_rank2.txt:
-  mygroup: -1, myrank: 2, role: compute,
-    compute (s):   261.887815,  io (s):   9.537152,
-    wait_io (s):     0.000000,  idle_io (s):   0.000000,
-    other (s):       0.049648,  total (s): 271.474614
-
-timing_acct_group-1_compute_rank3.txt:
-  mygroup: -1, myrank: 3, role: compute,
-    compute (s):   261.597632,  io (s):   9.886255,
-    wait_io (s):     0.000000,  idle_io (s):   0.000000,
-    other (s):       0.051348,  total (s): 271.535234
-```
-
-| category | fraction of total |
-|---|---|
-| compute | ~96.5 % |
-| io (binary undo-att checkpoint writes) | ~3.4 % |
-| wait_io | 0 % (no IO server) |
-| idle_io | 0 % (no IO server) |
-| other | ~0.04 % |
-
----
-
-### Case 2 — `HDF5_IO_NODES = 1`, `HDF5_ENABLED = .true.` (4 compute + 1 IO server)
+### Case 1: HDF5_IO_NODES=0 (no IO server, binary checkpoint)
 
 ```
 timing_acct_group-1_compute_rank0.txt:
-  mygroup: -1, myrank: 0, role: compute,
-    compute (s):   261.640241,  io (s):   7.850409,
-    wait_io (s):     0.000000,  idle_io (s):   0.000000,
-    other (s):       0.096213,  total (s): 269.586863
+it_begin: 1, it_end: 700, mygroup: -1, myrank: 0, role: compute, compute (s):     262.266749, io (s):       9.241194, wait_io (s):       0.000000, idle_io (s):       0.000000, other (s):       0.101484, total (s):     271.609427, mpi_wtime (s):     2365514.273175910000, date: 20260529, time: 001336.835
 
 timing_acct_group-1_compute_rank1.txt:
-  mygroup: -1, myrank: 1, role: compute,
-    compute (s):   261.511526,  io (s):   8.034591,
-    wait_io (s):     0.000000,  idle_io (s):   0.000000,
-    other (s):       0.049422,  total (s): 269.595539
+it_begin: 1, it_end: 700, mygroup: -1, myrank: 1, role: compute, compute (s):     262.154737, io (s):       9.388689, wait_io (s):       0.000000, idle_io (s):       0.000000, other (s):       0.049326, total (s):     271.592752, mpi_wtime (s):     2365514.240927030000, date: 20260529, time: 001336.803
 
 timing_acct_group-1_compute_rank2.txt:
-  mygroup: -1, myrank: 2, role: compute,
-    compute (s):   261.361392,  io (s):   8.184355,
-    wait_io (s):     0.000000,  idle_io (s):   0.000000,
-    other (s):       0.049793,  total (s): 269.595539
+it_begin: 1, it_end: 700, mygroup: -1, myrank: 2, role: compute, compute (s):     261.859909, io (s):       9.712496, wait_io (s):       0.000000, idle_io (s):       0.000000, other (s):       0.049594, total (s):     271.621998, mpi_wtime (s):     2365514.270173290000, date: 20260529, time: 001336.832
 
 timing_acct_group-1_compute_rank3.txt:
-  mygroup: -1, myrank: 3, role: compute,
-    compute (s):   261.056227,  io (s):   8.487966,
-    wait_io (s):     0.000000,  idle_io (s):   0.000000,
-    other (s):       0.051347,  total (s): 269.595540
+it_begin: 1, it_end: 700, mygroup: -1, myrank: 3, role: compute, compute (s):     261.676462, io (s):       9.902845, wait_io (s):       0.000000, idle_io (s):       0.000000, other (s):       0.051354, total (s):     271.630660, mpi_wtime (s):     2365514.278834740000, date: 20260529, time: 001336.841
+```
+
+- All 4 ranks: ~262s compute, ~9.2–9.9s IO, ~271.6s total.
+- `wait_io` and `idle_io` are 0 (no IO server).
+- `other` is small (~0.05–0.10s): init overhead, stability checks, etc.
+
+### Case 2: HDF5_IO_NODES=1 (1 IO server, HDF5 checkpoint)
+
+```
+timing_acct_group-1_compute_rank0.txt:
+it_begin: 1, it_end: 700, mygroup: -1, myrank: 0, role: compute, compute (s):     262.064213, io (s):       7.845944, wait_io (s):       0.000000, idle_io (s):       0.000000, other (s):       0.106870, total (s):     270.017027, mpi_wtime (s):     2365796.418162200000, date: 20260529, time: 001818.981
+
+timing_acct_group-1_compute_rank3.txt:
+it_begin: 1, it_end: 700, mygroup: -1, myrank: 3, role: compute, compute (s):     261.488691, io (s):       8.485712, wait_io (s):       0.000000, idle_io (s):       0.000000, other (s):       0.051444, total (s):     270.025847, mpi_wtime (s):     2365796.418163490000, date: 20260529, time: 001818.981
 
 timing_acct_group-1_io_server_rank0.txt:
-  mygroup: -1, myrank: 0, role: io_server,
-    compute (s):     0.000000,  io (s):   0.085370,
-    wait_io (s):     0.000000,  idle_io (s): 269.340074,
-    other (s):       0.191127,  total (s): 269.616572
+it_begin: 0, it_end: 0, mygroup: -1, myrank: 0, role: io_server, compute (s):       0.000000, io (s):       0.090727, wait_io (s):       0.000000, idle_io (s):     269.763886, other (s):       0.194300, total (s):     270.048913, mpi_wtime (s):     2365796.441136470000, date: 20260529, time: 001819.004
 ```
 
-| rank | role | compute | io | wait_io | idle_io |
-|---|---|---|---|---|---|
-| 0–3 | compute | ~97 % | ~3 % (data pack + MPI_Isend) | ~0 % | 0 % |
-| 0 (IO server) | io_server | 0 % | ~0.03 % (HDF5 writes) | 0 % | ~99.9 % |
+- Compute ranks: ~262s compute, ~7.8–8.5s IO (slightly less than case 1 thanks to HDF5 batching).
+- IO server: 0s compute, 0.09s IO, 269.8s idle — waiting in `MPI_Probe` since no
+  undo snapshots were triggered (single subset; `NT_DUMP_ATTENUATION > NSTEP`).
+- IO server `it_begin: 0, it_end: 0` — the final residual record (no per-snapshot records
+  because no checkpoint IO occurred during the run).
 
-**Key observations from Case 2:**
-
-1. **IO server spends 99.9 % of its time idle** in `idle_mpi_io()` / `MPI_Probe`
-   (269.3 s idle vs. 0.085 s actual HDF5 writes). The write work is negligible compared
-   to the wait time between checkpoints.
-
-2. **`wait_io ≈ 0` for compute ranks** — the IO server is parked in a blocking
-   `MPI_Probe`, so it accepts the `MPI_Isend` essentially instantaneously and
-   `wait_all_send()` returns in nanoseconds.
-
-3. **Compute `io` decreased vs. Case 1** (~8.1 s vs. ~9.5 s, −15 %) — the actual disk
-   write latency is hidden on the IO server while compute ranks move on. The remaining
-   compute io time is the data-packing cost.
-
-4. **Total elapsed time decreased** (~269.6 s vs. ~271.5 s) despite adding an extra
-   MPI rank, confirming the IO server removes a blocking disk-write from the critical
-   path.
+> **Note:** To see multiple records per file (one per subset), run with
+> `NSTEP > NT_DUMP_ATTENUATION_VAL` so that the simulation spans multiple subsets.
 
 ---
 
@@ -317,9 +301,9 @@ timing_acct_group-1_io_server_rank0.txt:
 
 | File | Change |
 |---|---|
-| `src/specfem3D/timing_accounting.F90` | New module: accumulators, start/stop helpers, `timing_report()` |
+| `src/specfem3D/timing_accounting.F90` | Module: accumulators, start/stop helpers, periodic `timing_report(rank, group, is_io_node, it_start, it_end)` with `t_interval_start` tracking |
 | `src/specfem3D/rules.mk` | Added `$O/timing_accounting.solverstatic.o` to OBJECTS; dependency rules for 4 consumers |
-| `src/specfem3D/iterate_time.F90` | `use timing_accounting`; `timing_reset()`; compute/io brackets; `timing_report()` call |
-| `src/specfem3D/iterate_time_undoatt.F90` | Same as above for undo-attenuation time loop |
+| `src/specfem3D/iterate_time.F90` | Periodic recording every `NTSTEP_BETWEEN_OUTPUT_INFO` steps and at `it_end` |
+| `src/specfem3D/iterate_time_undoatt.F90` | Per-subset recording: one record per `iteration_on_subset` (after checkpoint IO + inner compute loop) |
 | `src/specfem3D/save_forward_arrays_hdf5.F90` | `wait_io` bracket around `wait_all_send()` inside `save_forward_arrays_undoatt_hdf5()` |
-| `src/specfem3D/hdf5_io_server.F90` | `timing_reset()`; `idle_io` bracket around `idle_mpi_io()`; `io` brackets around all recv/write calls; `timing_report()` call |
+| `src/specfem3D/hdf5_io_server.F90` | Per-undo-snapshot recording after each `write_buffered_undo_snapshot()` + final residual record |
