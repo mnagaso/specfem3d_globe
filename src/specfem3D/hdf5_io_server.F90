@@ -1083,11 +1083,15 @@ contains
   use constants, only: myrank, my_status_size, my_status_source, my_status_tag, IMAIN
 
   use io_bandwidth
+  use timing_accounting
 
   implicit none
 
   integer :: status(my_status_size)
   integer :: tag, tag_src
+
+  ! timing for IO node total elapsed
+  double precision :: io_time_start
 
   ! vars forward undo att arrays
   ! undo attenuation
@@ -1173,6 +1177,9 @@ contains
   !---------------------------------------------------------------------------
   ! PHASE 1: COUNTER INITIALIZATION
   !---------------------------------------------------------------------------
+  call timing_reset()
+  io_time_start = MPI_Wtime()
+
   ! undo attenuation
   n_recv_msg_ford_undo = 0 ! number of messages received for undo attenuation of one iteration
   max_ford_undo_out    = 0 ! number of iterations when IO happens for undo attenuation
@@ -1597,7 +1604,9 @@ contains
 
 
     ! waiting for a MPI message
+    call timing_idle_start()
     call idle_mpi_io(status)
+    call timing_idle_stop()
 
     tag = status(my_status_tag)
     tag_src = status(my_status_source)
@@ -1637,12 +1646,14 @@ contains
       endif
 
       ! receive the data
+      call timing_io_start()
       call recv_and_write_ford_undo(tag, tag_src, status, &
                                     dump_ford_undo_1d_glob, &
                                     dump_ford_undo_2d_glob, &
                                     dump_ford_undo_4d, &
                                     dump_ford_undo_5d, &
                                     ford_undo_out_count) ! use for the filename
+      call timing_io_stop()
 
       ! count 1 message received
       n_recv_msg_ford_undo = n_recv_msg_ford_undo + 1
@@ -1653,9 +1664,11 @@ contains
     if (MOVIE_SURFACE .and. &
         (tag == io_tag_surf_ux .or. tag == io_tag_surf_uy .or. tag == io_tag_surf_uz)) then
 
+      call timing_io_start()
       call recv_surface_movie(tag, tag_src, status, &
                               dump_surf_ux, dump_surf_uy, dump_surf_uz, &
                               surf_frame_ux, surf_frame_uy, surf_frame_uz)
+      call timing_io_stop()
 
       ! count 1 message received
       n_recv_msg_surf = n_recv_msg_surf + 1
@@ -1668,11 +1681,13 @@ contains
          tag == io_tag_vol_strain_NE .or. tag == io_tag_vol_strain_NZ .or. tag == io_tag_vol_strain_EZ .or. &
          tag == io_tag_vol_vec_N     .or. tag == io_tag_vol_vec_E     .or. tag == io_tag_vol_vec_Z)) then
 
+      call timing_io_start()
       call recv_volume_movie(tag, tag_src, status, &
                  dump_vol1, dump_vol2, dump_vol3, &
                  dump_vol4, dump_vol5, dump_vol6, &
                  vol_frame1, vol_frame2, vol_frame3, &
                  vol_frame4, vol_frame5, vol_frame6)
+      call timing_io_stop()
 
       ! count 1 message received
       n_recv_msg_vol = n_recv_msg_vol + 1
@@ -1683,9 +1698,11 @@ contains
     if (MOVIE_VOLUME .and. &
         (tag == io_tag_vol_norm_cm .or. tag == io_tag_vol_norm_oc .or. tag == io_tag_vol_norm_ic)) then
 
+      call timing_io_start()
       call recv_volume_norm_movie(tag, tag_src, status, &
                                   dump_vol_norm_cm, dump_vol_norm_oc, dump_vol_norm_ic, &
                                   vol_frame_norm_cm, vol_frame_norm_oc, vol_frame_norm_ic)
+      call timing_io_stop()
 
       ! count 1 message received
       n_recv_msg_vol = n_recv_msg_vol + 1
@@ -1702,12 +1719,14 @@ contains
 
         ! close undo snapshot file for this iteration
         if (undo_state%file_open) then
+          call timing_io_start()
           call write_buffered_undo_snapshot(undo_use_collective)
           if (HDF5_IO_NODES > 1) then
             call h5_close_file()
           else
             call h5_close_file_p()
           endif
+          call timing_io_stop()
           undo_state%file_open = .false.
           undo_state%datasets_initialized = .false.
         endif
@@ -1729,8 +1748,10 @@ contains
       if (max_surf_frames > 0 .and. n_msg_surf > 0) then
         if (n_recv_msg_surf >= n_msg_surf) then
           ! all messages for this frame have been received; write buffered frame
+          call timing_io_start()
           call write_surface_frame(surf_frame_count, it_first_surf, &
                                    surf_frame_ux, surf_frame_uy, surf_frame_uz)
+          call timing_io_stop()
           surf_frame_count = surf_frame_count + 1
           n_recv_msg_surf = 0
 
@@ -1745,6 +1766,7 @@ contains
       if (max_vol_frames > 0 .and. n_msg_vol > 0) then
         if (n_recv_msg_vol >= n_msg_vol) then
           ! all messages for this frame have been received; write buffered frame
+          call timing_io_start()
           select case (MOVIE_VOLUME_TYPE)
           case (1,2,3,5,6)
             call write_volume_frame(vol_frame_count, it_first_vol, &
@@ -1754,6 +1776,7 @@ contains
             call write_volume_norm_frame(vol_frame_count, it_first_vol, &
                                          vol_frame_norm_cm, vol_frame_norm_oc, vol_frame_norm_ic)
           end select
+          call timing_io_stop()
           vol_frame_count = vol_frame_count + 1
           n_recv_msg_vol = 0
 
@@ -1772,6 +1795,9 @@ contains
   !---------------------------------------------------------------------------
   ! END OF MAIN IDLING LOOP
   !---------------------------------------------------------------------------
+
+  ! timing accounting report for IO node (no barriers)
+  call timing_report(myrank, mygroup, .true., MPI_Wtime() - io_time_start)
 
   call calculate_bandwidth_all_procs()
 

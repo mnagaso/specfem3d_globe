@@ -90,6 +90,7 @@ specfem3D_SOLVER_OBJECTS += \
 	$O/initialize_simulation.solverstatic.o \
 	$O/io_throttle.solverstatic.o \
 	$O/io_tester.solverstatic.o \
+	$O/timing_accounting.solverstatic.o \
 	$O/iterate_time.solverstatic.o \
 	$O/iterate_time_undoatt.solverstatic.o \
 	$O/locate_point.solverstatic.o \
@@ -472,6 +473,12 @@ $O/write_movie_volume_hdf5.solverstatic.o: $O/hdf5_io_server.solverstatic.o
 # ensure io_throttle module is compiled before dependent files
 $O/save_forward_arrays.solverstatic.o: $O/io_throttle.solverstatic.o
 $O/iterate_time_undoatt.solverstatic.o: $O/io_throttle.solverstatic.o
+
+# ensure timing_accounting module is compiled before dependent files
+$O/iterate_time.solverstatic.o: $O/timing_accounting.solverstatic.o
+$O/iterate_time_undoatt.solverstatic.o: $O/timing_accounting.solverstatic.o
+$O/save_forward_arrays_hdf5.solverstatic.o: $O/timing_accounting.solverstatic.o
+$O/hdf5_io_server.solverstatic.o: $O/timing_accounting.solverstatic.o
 
 ###
 ### specfem3D - optimized flags and dependence on values from mesher here

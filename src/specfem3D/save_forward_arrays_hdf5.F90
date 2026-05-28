@@ -519,6 +519,7 @@
   use specfem_par_full_gravity
 
   use io_bandwidth
+  use timing_accounting
 
 #ifdef USE_HDF5
   use manager_hdf5
@@ -657,7 +658,12 @@
 
     ! wait for current subset's sends to complete before returning to time loop
     ! (prevents MPI resource conflict between inter-communicator and compute-only communicator)
+    ! split timing: IO stops, wait starts
+    call timing_io_stop()
+    call timing_wait_start()
     call wait_all_send()
+    call timing_wait_stop()
+    call timing_io_start()
 
     ! debug: log completion of undo send on compute side
     print *, 'compute undo_send_done: subset', iteration_on_subset, 'rank', myrank, 'dest_ionod', dest_ionod, &

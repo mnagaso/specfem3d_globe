@@ -35,6 +35,7 @@
   use specfem_par_outercore
   use specfem_par_movie
   use io_server_hdf5
+  use timing_accounting
 
   implicit none
 
@@ -97,6 +98,7 @@
   seismo_current = 0
 
   ! get MPI starting time
+  call timing_reset()
   time_start = wtime()
 
   ! *********************************************************
@@ -113,6 +115,8 @@
       call check_stability()
       if (I_am_running_on_a_slow_node) goto 100
     endif
+
+    call timing_compute_start()
 
     do istage = 1, NSTAGE_TIME_SCHEME ! is equal to 1 if Newmark because only one stage then
 
@@ -135,6 +139,8 @@
       call compute_forces_viscoelastic()
 
     enddo ! end of very big external loop on istage for all the stages of the LDDRK time scheme (only one stage if Newmark)
+
+    call timing_compute_stop()
 
     ! save the forward run to disk for the alpha kernel only
     if (EXACT_UNDOING_TO_DISK .and. SIMULATION_TYPE == 1) then
@@ -165,6 +171,8 @@
 
     ! kernel simulations (forward and adjoint wavefields)
     if (SIMULATION_TYPE == 3) then
+
+      call timing_compute_start()
 
       if (.not. EXACT_UNDOING_TO_DISK) then
         ! note: we step back in time (using time steps - DT ), i.e. wavefields b_displ_..() are time-reversed here
@@ -231,21 +239,28 @@
 
       endif ! of if (.not. EXACT_UNDOING_TO_DISK)
 
+      call timing_compute_stop()
+
     endif ! kernel simulations
 
     ! calculating gravity field at current timestep
     if (GRAVITY_SIMULATION) call gravity_timeseries()
 
     ! write the seismograms with time shift (GPU_MODE transfer included)
+    call timing_io_start()
     call write_seismograms()
+    call timing_io_stop()
 
     ! adjoint simulations: kernels
     ! attention: for GPU_MODE and ANISOTROPIC_KL it is necessary to use resort_array (see lines 265-268)
     if (SIMULATION_TYPE == 3) then
+      call timing_compute_start()
       call compute_kernels()
+      call timing_compute_stop()
     endif
 
     ! outputs movie files
+    call timing_io_start()
     if (MOVIE_SURFACE .or. MOVIE_VOLUME) call write_movie_output()
 
     ! first step of noise tomography, i.e., save a surface movie at every time step
@@ -253,6 +268,7 @@
     if (NOISE_TOMOGRAPHY == 1) then
       call noise_save_surface_movie()
     endif
+    call timing_io_stop()
 
     ! updates VTK window
     if (VTK_MODE) then
@@ -280,6 +296,9 @@
 
   ! close the huge file that contains a dump of all the time steps to disk
   if (EXACT_UNDOING_TO_DISK) call finish_exact_undoing_to_disk()
+
+  ! user output of timing accounting (no barriers)
+  call timing_report(myrank, mygroup, .false., wtime() - time_start)
 
   ! user output of runtime
   call print_elapsed_time()

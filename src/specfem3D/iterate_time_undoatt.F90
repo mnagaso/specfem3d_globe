@@ -36,6 +36,7 @@
   use specfem_par_noise
   use specfem_par_movie
   use io_server_hdf5
+  use timing_accounting
 
   implicit none
 
@@ -266,6 +267,7 @@
   it = 0
 
   ! get MPI starting time
+  call timing_reset()
   time_start = wtime()
 
   ! *********************************************************
@@ -283,6 +285,8 @@
         call check_stability()
         if (I_am_running_on_a_slow_node) goto 200
       endif
+
+      call timing_compute_start()
 
       do istage = 1, NSTAGE_TIME_SCHEME ! is equal to 1 if Newmark because only one stage then
 
@@ -306,7 +310,10 @@
 
       enddo ! end of very big external loop on istage for all the stages of the LDDRK time scheme (only one stage if Newmark)
 
+      call timing_compute_stop()
+
       ! write the seismograms with time shift (GPU_MODE transfer included)
+      call timing_io_start()
       call write_seismograms()
 
       ! outputs movie files
@@ -317,6 +324,7 @@
       if (NOISE_TOMOGRAPHY == 1) then
         call noise_save_surface_movie()
       endif
+      call timing_io_stop()
 
       ! updates VTK window
       if (VTK_MODE) then
@@ -339,11 +347,15 @@
     ! wavefield storage
     if (SIMULATION_TYPE == 1 .and. SAVE_FORWARD) then
       ! saves forward wavefields
+      call timing_io_start()
       call save_forward_arrays_undoatt()
+      call timing_io_stop()
 
     else if (SIMULATION_TYPE == 3) then
       ! reads in last stored forward wavefield
+      call timing_io_start()
       call read_forward_arrays_undoatt()
+      call timing_io_stop()
 
       ! note: after reading the restart files of displacement back from disk, recompute the strain from displacement;
       !       this is better than storing the strain to disk as well, which would drastically increase I/O volume
@@ -383,6 +395,8 @@
           if (I_am_running_on_a_slow_node) goto 100
         endif
 
+        call timing_compute_start()
+
         do istage = 1, NSTAGE_TIME_SCHEME ! is equal to 1 if Newmark because only one stage then
 
           if (USE_LDDRK) then
@@ -405,7 +419,10 @@
 
         enddo ! istage
 
+        call timing_compute_stop()
+
         ! write the seismograms with time shift
+        call timing_io_start()
         call write_seismograms()
 
         ! outputs movie files
@@ -416,6 +433,7 @@
         if (NOISE_TOMOGRAPHY == 1) then
           call noise_save_surface_movie()
         endif
+        call timing_io_stop()
 
         ! updates VTK window
         if (VTK_MODE) then
@@ -463,6 +481,8 @@
           call check_stability_backward()
         endif
 
+        call timing_compute_start()
+
         do istage = 1, NSTAGE_TIME_SCHEME ! is equal to 1 if Newmark because only one stage then
 
           if (USE_LDDRK) then
@@ -484,6 +504,8 @@
           call compute_forces_viscoelastic_backward()
 
         enddo ! istage
+
+        call timing_compute_stop()
 
         ! transfers wavefields from GPU to CPU for buffering
         if (mod(it_temp+it_subset_end-it_of_this_subset+1, ntstep_kl) == 0) then
@@ -581,6 +603,8 @@
         endif
 
         ! computes adjoint wavefield
+        call timing_compute_start()
+
         do istage = 1, NSTAGE_TIME_SCHEME ! is equal to 1 if Newmark because only one stage then
 
           if (USE_LDDRK) then
@@ -603,8 +627,12 @@
 
         enddo ! istage
 
+        call timing_compute_stop()
+
         ! write the seismograms with time shift
+        call timing_io_start()
         call write_seismograms()
+        call timing_io_stop()
 
         ! kernel computation
         ! adjoint simulations: kernels
@@ -619,7 +647,9 @@
             endif
           endif
 #endif
+          call timing_compute_start()
           call compute_kernels()
+          call timing_compute_stop()
         endif
 
       enddo ! subset loop
@@ -659,6 +689,9 @@
 
   ! close the huge file that contains a dump of all the time steps to disk
   if (EXACT_UNDOING_TO_DISK) call finish_exact_undoing_to_disk()
+
+  ! user output of timing accounting (no barriers)
+  call timing_report(myrank, mygroup, .false., wtime() - time_start)
 
   ! user output of runtime
   call print_elapsed_time()
