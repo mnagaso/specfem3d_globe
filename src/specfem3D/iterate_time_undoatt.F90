@@ -444,6 +444,13 @@
         endif
         call timing_io_stop()
 
+        ! periodic timing record (every NTSTEP_BETWEEN_OUTPUT_INFO steps and at the end)
+        if (mod(it, NTSTEP_BETWEEN_OUTPUT_INFO) == 0 .or. it == it_end) then
+          call timing_report(myrank, mygroup, .false., it_timing_begin, it)
+          call timing_reset()
+          it_timing_begin = it + 1
+        endif
+
         ! updates VTK window
         if (VTK_MODE) then
           call it_update_vtkwindow()
@@ -661,13 +668,22 @@
           call timing_compute_stop()
         endif
 
+        ! periodic timing record (every NTSTEP_BETWEEN_OUTPUT_INFO steps and at the end)
+        if (mod(it, NTSTEP_BETWEEN_OUTPUT_INFO) == 0 .or. it == it_end) then
+          call timing_report(myrank, mygroup, .false., it_timing_begin, it)
+          call timing_reset()
+          it_timing_begin = it + 1
+        endif
+
       enddo ! subset loop
 
     end select ! SIMULATION_TYPE
 
-    ! record timing for this subset interval
-    call timing_report(myrank, mygroup, .false., it_timing_begin, it)
-    call timing_reset()
+    ! record timing for remaining steps since last periodic record (if any)
+    if (it_timing_begin <= it) then
+      call timing_report(myrank, mygroup, .false., it_timing_begin, it)
+      call timing_reset()
+    endif
 
   !
   !---- end of time iteration loop

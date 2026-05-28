@@ -17,11 +17,18 @@ The timing is recorded **periodically** rather than as a single accumulated tota
 
 **`iterate_time_undoatt.F90` (undo-attenuation):**
 ```
-subset 1: checkpoint IO + compute it=1..NT_DUMP_ATTENUATION  → record, reset
-subset 2: checkpoint IO + compute it=N+1..2N                 → record, reset
-...
-subset K: checkpoint IO + compute it=...NSTEP                → record, reset
+subset 1 start: checkpoint IO (save_forward_arrays_undoatt)
+  compute it=1..200 + movie IO     → record, reset   (includes checkpoint IO)
+  compute it=201..400 + movie IO   → record, reset
+  ...
+  compute it=601..700 + movie IO   → record, reset
+subset 2 start: checkpoint IO
+  compute it=701..900 + movie IO   → record, reset   (includes checkpoint IO)
+  ...
 ```
+Recording fires every `NTSTEP_BETWEEN_OUTPUT_INFO` steps and at `it_end`.
+Checkpoint IO time is included in the first interval of each subset.
+Any remaining steps at subset boundaries are also recorded.
 
 **`iterate_time.F90` (no undo-attenuation):**
 ```
@@ -250,50 +257,51 @@ log entries and correlating with system-level profiling traces.
 
 Test configuration: `regional_Greece_small_LDDRK` example on Fugaku (A64FX),
 `NCHUNKS=1`, `NPROC_XI=2`, `NPROC_ETA=2`, `NSTEP=700`, `UNDO_ATTENUATION=.true.`,
-`SIMULATION_TYPE=1`. `NT_DUMP_ATTENUATION_VAL=1802` (computed by mesher), so the
-entire run fits in a single undo-attenuation subset (1 record per rank).
+`SIMULATION_TYPE=1`, `MOVIE_VOLUME=.true.`, `MOVIE_COARSE=.true.`,
+`NTSTEP_BETWEEN_FRAMES=50`, `NTSTEP_BETWEEN_OUTPUT_INFO=200`.
+`NT_DUMP_ATTENUATION_VAL=1802` (computed by mesher), so the entire run fits in a
+single undo-attenuation subset. Periodic recording produces 4 records per rank
+(at steps 200, 400, 600, 700).
 
 ### Case 1: HDF5_IO_NODES=0 (no IO server, binary checkpoint)
 
 ```
 timing_acct_group-1_compute_rank0.txt:
-it_begin: 1, it_end: 700, mygroup: -1, myrank: 0, role: compute, compute (s):     262.266749, io (s):       9.241194, wait_io (s):       0.000000, idle_io (s):       0.000000, other (s):       0.101484, total (s):     271.609427, mpi_wtime (s):     2365514.273175910000, date: 20260529, time: 001336.835
-
-timing_acct_group-1_compute_rank1.txt:
-it_begin: 1, it_end: 700, mygroup: -1, myrank: 1, role: compute, compute (s):     262.154737, io (s):       9.388689, wait_io (s):       0.000000, idle_io (s):       0.000000, other (s):       0.049326, total (s):     271.592752, mpi_wtime (s):     2365514.240927030000, date: 20260529, time: 001336.803
-
-timing_acct_group-1_compute_rank2.txt:
-it_begin: 1, it_end: 700, mygroup: -1, myrank: 2, role: compute, compute (s):     261.859909, io (s):       9.712496, wait_io (s):       0.000000, idle_io (s):       0.000000, other (s):       0.049594, total (s):     271.621998, mpi_wtime (s):     2365514.270173290000, date: 20260529, time: 001336.832
-
-timing_acct_group-1_compute_rank3.txt:
-it_begin: 1, it_end: 700, mygroup: -1, myrank: 3, role: compute, compute (s):     261.676462, io (s):       9.902845, wait_io (s):       0.000000, idle_io (s):       0.000000, other (s):       0.051354, total (s):     271.630660, mpi_wtime (s):     2365514.278834740000, date: 20260529, time: 001336.841
+it_begin: 1, it_end: 200, ..., compute (s):  144.44, io (s):  2.91, ..., total (s):  147.39
+it_begin: 201, it_end: 400, ..., compute (s):   50.08, io (s):  2.50, ..., total (s):   52.60
+it_begin: 401, it_end: 600, ..., compute (s):   45.61, io (s):  2.43, ..., total (s):   48.06
+it_begin: 601, it_end: 700, ..., compute (s):   22.51, io (s):  1.37, ..., total (s):   23.90
 ```
 
-- All 4 ranks: ~262s compute, ~9.2–9.9s IO, ~271.6s total.
+- **4 records per rank**: at steps 200, 400, 600, and 700 (every `NTSTEP_BETWEEN_OUTPUT_INFO` + final step).
+- **First interval (1–200) has 3× more compute** than later intervals: includes
+  undo-attenuation checkpoint save (`save_forward_arrays_undoatt()`) overhead at subset start,
+  plus cache warm-up effects.
+- **IO proportional to movie frames**: 4 frames in 200-step intervals (~2.5s IO),
+  2 frames in the 100-step interval (~1.4s IO). Each frame writes `MOVIE_VOLUME_TYPE=2`
+  (div+curl) fields for all GLL points.
 - `wait_io` and `idle_io` are 0 (no IO server).
-- `other` is small (~0.05–0.10s): init overhead, stability checks, etc.
 
 ### Case 2: HDF5_IO_NODES=1 (1 IO server, HDF5 checkpoint)
 
 ```
 timing_acct_group-1_compute_rank0.txt:
-it_begin: 1, it_end: 700, mygroup: -1, myrank: 0, role: compute, compute (s):     262.064213, io (s):       7.845944, wait_io (s):       0.000000, idle_io (s):       0.000000, other (s):       0.106870, total (s):     270.017027, mpi_wtime (s):     2365796.418162200000, date: 20260529, time: 001818.981
-
-timing_acct_group-1_compute_rank3.txt:
-it_begin: 1, it_end: 700, mygroup: -1, myrank: 3, role: compute, compute (s):     261.488691, io (s):       8.485712, wait_io (s):       0.000000, idle_io (s):       0.000000, other (s):       0.051444, total (s):     270.025847, mpi_wtime (s):     2365796.418163490000, date: 20260529, time: 001818.981
+it_begin: 1, it_end: 200, ..., compute (s):  144.33, io (s):  2.53, ..., total (s):  146.90
+it_begin: 201, it_end: 400, ..., compute (s):   49.95, io (s):  2.10, ..., total (s):   52.08
+it_begin: 401, it_end: 600, ..., compute (s):   45.49, io (s):  2.08, ..., total (s):   47.59
+it_begin: 601, it_end: 700, ..., compute (s):   22.39, io (s):  1.14, ..., total (s):   23.55
 
 timing_acct_group-1_io_server_rank0.txt:
-it_begin: 0, it_end: 0, mygroup: -1, myrank: 0, role: io_server, compute (s):       0.000000, io (s):       0.090727, wait_io (s):       0.000000, idle_io (s):     269.763886, other (s):       0.194300, total (s):     270.048913, mpi_wtime (s):     2365796.441136470000, date: 20260529, time: 001819.004
+it_begin: 0, it_end: 0, ..., io (s):  0.13, idle_io (s):  269.87, ..., total (s):  270.19
 ```
 
-- Compute ranks: ~262s compute, ~7.8–8.5s IO (slightly less than case 1 thanks to HDF5 batching).
-- IO server: 0s compute, 0.09s IO, 269.8s idle — waiting in `MPI_Probe` since no
-  undo snapshots were triggered (single subset; `NT_DUMP_ATTENUATION > NSTEP`).
-- IO server `it_begin: 0, it_end: 0` — the final residual record (no per-snapshot records
-  because no checkpoint IO occurred during the run).
-
-> **Note:** To see multiple records per file (one per subset), run with
-> `NSTEP > NT_DUMP_ATTENUATION_VAL` so that the simulation spans multiple subsets.
+- Compute ranks: same pattern as case 1, but slightly less IO time (~2.1s vs ~2.5s
+  for 200-step intervals) thanks to HDF5 batching.
+- IO server: 0s compute, 0.13s IO, 269.9s idle — the server spent nearly all its time
+  blocked in `MPI_Probe` waiting for messages.
+- IO server `it_begin: 0, it_end: 0` — the final residual record (no per-snapshot
+  records because `NT_DUMP_ATTENUATION_VAL > NSTEP`, so no undo checkpoint IO occurred
+  through the IO server).
 
 ---
 
@@ -304,6 +312,6 @@ it_begin: 0, it_end: 0, mygroup: -1, myrank: 0, role: io_server, compute (s):   
 | `src/specfem3D/timing_accounting.F90` | Module: accumulators, start/stop helpers, periodic `timing_report(rank, group, is_io_node, it_start, it_end)` with `t_interval_start` tracking |
 | `src/specfem3D/rules.mk` | Added `$O/timing_accounting.solverstatic.o` to OBJECTS; dependency rules for 4 consumers |
 | `src/specfem3D/iterate_time.F90` | Periodic recording every `NTSTEP_BETWEEN_OUTPUT_INFO` steps and at `it_end` |
-| `src/specfem3D/iterate_time_undoatt.F90` | Per-subset recording: one record per `iteration_on_subset` (after checkpoint IO + inner compute loop) |
+| `src/specfem3D/iterate_time_undoatt.F90` | Periodic recording every `NTSTEP_BETWEEN_OUTPUT_INFO` steps within each undo-attenuation subset, plus conditional recording at subset boundaries |
 | `src/specfem3D/save_forward_arrays_hdf5.F90` | `wait_io` bracket around `wait_all_send()` inside `save_forward_arrays_undoatt_hdf5()` |
 | `src/specfem3D/hdf5_io_server.F90` | Per-undo-snapshot recording after each `write_buffered_undo_snapshot()` + final residual record |
