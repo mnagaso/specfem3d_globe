@@ -9,7 +9,7 @@ module io_bandwidth
 
     subroutine initialize_bytes_written()
       bytes_written = 0
-      time_delta = 0.0
+      time_delta = 0.0d0
     end subroutine initialize_bytes_written
 
     subroutine start_timer()
@@ -45,8 +45,8 @@ module io_bandwidth
       double precision :: elapsed_time, bandwidth
 
       elapsed_time = time_delta
-      if (elapsed_time > 0.0) then
-        bandwidth = bytes_written / (elapsed_time * 1.0e6)  ! Bandwidth in MB/s
+      if (elapsed_time > 0.0d0) then
+        bandwidth = dble(bytes_written) / (elapsed_time * 1.0d6)  ! Bandwidth in MB/s
         print *, 'I/O Bandwidth: ', bandwidth, ' MB/s'
       else
         print *, 'Elapsed time is zero, cannot calculate bandwidth'
@@ -60,7 +60,7 @@ module io_bandwidth
       implicit none
       integer :: i, unit_number, ierr
       double precision :: elapsed_time, max_elapsed_time, &
-    	      bandwidth, total_bandwidth, current_time
+              bandwidth, total_bandwidth, current_time
       double precision :: bytes_written_dp, total_bytes_dp  ! Use double precision for large byte counts
       character(len=20) :: filename
       character(len=10) :: mygroup_str
@@ -68,6 +68,13 @@ module io_bandwidth
       character(len=10) :: time_str
       integer :: datetime_values(8)
       logical :: file_exists
+
+      ! Snapshot local counters before any synchronization.
+      ! Some ranks can have zero local movie points and therefore elapsed_time == 0.
+      ! They must still participate in all MPI collective calls below.
+      elapsed_time = time_delta
+      if (elapsed_time < 0.0d0) elapsed_time = 0.0d0
+      bytes_written_dp = dble(bytes_written)
 
       ! Convert mygroup to a character string
       write(mygroup_str, '(I0)') mygroup
@@ -97,60 +104,64 @@ module io_bandwidth
 
       call synchronize_all()
 
-      elapsed_time = time_delta
-      if (elapsed_time > 0.0) then
-          bandwidth = dble(bytes_written) / (elapsed_time * 1.0d6)  ! Bandwidth in MB/s
+      ! MPI collectives: all ranks must participate in the same order,
+      ! even if this rank wrote zero bytes or elapsed_time is zero.
+      call sum_all_dp(bytes_written_dp, total_bytes_dp)
+      call max_all_dp(elapsed_time, max_elapsed_time)
 
-          ! calculate total bytes written across all processes using double precision
-          bytes_written_dp = dble(bytes_written)
-          call sum_all_dp(bytes_written_dp, total_bytes_dp)
-          ! get the maximum elapsed time across all processes
-          call max_all_dp(elapsed_time, max_elapsed_time)
+      if (elapsed_time > 0.0d0) then
+          bandwidth = bytes_written_dp / (elapsed_time * 1.0d6)  ! Bandwidth in MB/s
+      else
+          bandwidth = 0.0d0
+      endif
 
-            ! calculate total bandwidth
-            total_bandwidth = total_bytes_dp / (max_elapsed_time * 1.0d6) ! Bandwidth in MB/s
+      if (max_elapsed_time > 0.0d0) then
+          total_bandwidth = total_bytes_dp / (max_elapsed_time * 1.0d6) ! Bandwidth in MB/s
+      else
+          total_bandwidth = 0.0d0
+      endif
 
-            ! Each process writes to the file sequentially
-            do i = 0, NPROCTOT_VAL-1
-              if (myrank == i) then
-                open(unit=unit_number, file=filename, status='old', action='write', position='append', iostat=ierr)
-                if (ierr /= 0) then
-                  print*, 'Error opening file: ', filename
-                  stop
-                end if
+      ! Each process writes to the file sequentially
+      do i = 0, NPROCTOT_VAL-1
+        if (myrank == i) then
+          open(unit=unit_number, file=filename, status='old', action='write', position='append', iostat=ierr)
+          if (ierr /= 0) then
+            print*, 'Error opening file: ', filename
+            stop
+          end if
 
-                ! record MPI wall-clock time and system date/time for this rank's bandwidth entry
-                current_time = MPI_Wtime()
-                call date_and_time(date=date_str, time=time_str, values=datetime_values)
+          ! record MPI wall-clock time and system date/time for this rank's bandwidth entry
+          current_time = MPI_Wtime()
+          call date_and_time(date=date_str, time=time_str, values=datetime_values)
 
-                write(unit_number, '(A, I0, A, I0, A, I0, A, F12.6, A, F12.6, A, F24.12, A, A, A, A)') &
-                  'mygroup: ', mygroup, ', myrank: ', myrank, ', bytes_written: ', bytes_written, &
-                  ', elapsed_time (s): ', elapsed_time, ', bandwidth: ', bandwidth, ' MB/s, mpi_wtime (s): ', current_time, &
-                  ', date: ', trim(date_str), ', time: ', trim(time_str)
-                close(unit_number)
-              end if
-              call synchronize_all()
-            end do
+          write(unit_number, '(A, I0, A, I0, A, I0, A, F12.6, A, ES16.6, A, F24.12, A, A, A, A)') &
+            'mygroup: ', mygroup, ', myrank: ', myrank, ', bytes_written: ', bytes_written, &
+            ', elapsed_time (s): ', elapsed_time, ', bandwidth: ', bandwidth, ' MB/s, mpi_wtime (s): ', current_time, &
+            ', date: ', trim(date_str), ', time: ', trim(time_str)
+          close(unit_number)
+        end if
+        call synchronize_all()
+      end do
 
-            ! Only the root process writes the total bandwidth
-            if (myrank == 0) then
-              open(unit=unit_number, file=filename, status='old', action='write', position='append', iostat=ierr)
-              if (ierr /= 0) then
-                print*, 'Error opening file: ', filename
-                stop
-              end if
+      ! Only the root process writes the total bandwidth
+      if (myrank == 0) then
+        open(unit=unit_number, file=filename, status='old', action='write', position='append', iostat=ierr)
+        if (ierr /= 0) then
+          print*, 'Error opening file: ', filename
+          stop
+        end if
 
-              ! record MPI wall-clock time and system date/time for this I/O bandwidth measurement
-              current_time = MPI_Wtime()
-              call date_and_time(date=date_str, time=time_str, values=datetime_values)
+        ! record MPI wall-clock time and system date/time for this I/O bandwidth measurement
+        current_time = MPI_Wtime()
+        call date_and_time(date=date_str, time=time_str, values=datetime_values)
 
-              write(unit_number, '(A, I0, A, F20.0, A, F12.6, A, F12.6, A, F24.12, A, A, A, A, A, I0)') &
-	          'mygroup: ', mygroup, ', total_bytes_written: ', total_bytes_dp, ', max_elapsed_time (s): ', &
-	          max_elapsed_time, ', total_bandwidth: ', total_bandwidth, ' MB/s, mpi_wtime (s): ', current_time, &
-            ', date: ', trim(date_str), ', time: ', trim(time_str), ', ms: ', datetime_values(8)
-              close(unit_number)
-            end if
+        write(unit_number, '(A, I0, A, F20.0, A, F12.6, A, ES16.6, A, F24.12, A, A, A, A, A, I0)') &
+          'mygroup: ', mygroup, ', total_bytes_written: ', total_bytes_dp, ', max_elapsed_time (s): ', &
+          max_elapsed_time, ', total_bandwidth: ', total_bandwidth, ' MB/s, mpi_wtime (s): ', current_time, &
+          ', date: ', trim(date_str), ', time: ', trim(time_str), ', ms: ', datetime_values(8)
+        close(unit_number)
       end if
+
     end subroutine calculate_bandwidth_all_procs
 
   end module io_bandwidth
