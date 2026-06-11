@@ -270,6 +270,15 @@
     endif
     call timing_io_stop()
 
+    ! one timing record per movie frame
+    if (MOVIE_SURFACE .or. MOVIE_VOLUME) then
+      if (mod(it - MOVIE_START, NTSTEP_BETWEEN_FRAMES) == 0 .and. &
+          it >= MOVIE_START .and. it <= MOVIE_STOP) then
+        call timing_report(myrank, mygroup, .false., it, it)
+        call timing_reset()
+      endif
+    endif
+
     ! updates VTK window
     if (VTK_MODE) then
       call it_update_vtkwindow()
@@ -298,7 +307,7 @@
   if (EXACT_UNDOING_TO_DISK) call finish_exact_undoing_to_disk()
 
   ! user output of timing accounting (no barriers)
-  call timing_report(myrank, mygroup, .false., wtime() - time_start)
+  call timing_report(myrank, mygroup, .false., 0, 0)
 
   ! user output of runtime
   call print_elapsed_time()

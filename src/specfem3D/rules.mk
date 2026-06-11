@@ -461,6 +461,18 @@ $O/SIEM_solve.solverstatic.o: $O/SIEM_math_library.shared.o $O/SIEM_poisson.solv
 $O/SIEM_solver_mpi.solverstatic.o: $O/SIEM_math_library.shared.o
 $O/SIEM_solver_petsc.solverstatic.o: $O/SIEM_math_library.shared.o
 $O/SIEM_compute_seismograms.solverstatic.o: $O/SIEM_math_library.shared.o
+
+# io_server_hdf5 を使うファイルは .mod に直接依存させる（ビルド順を確実にする）
+$(FC_MODDIR)/io_server_hdf5.$(FC_MODEXT): $O/hdf5_io_server.solverstatic.o
+	@true
+
+$O/initialize_simulation.solverstatic.o: $(FC_MODDIR)/io_server_hdf5.$(FC_MODEXT)
+$O/read_forward_arrays_hdf5.solverstatic.o: $(FC_MODDIR)/io_server_hdf5.$(FC_MODEXT)
+$O/iterate_time.solverstatic.o: $(FC_MODDIR)/io_server_hdf5.$(FC_MODEXT)
+$O/iterate_time_undoatt.solverstatic.o: $(FC_MODDIR)/io_server_hdf5.$(FC_MODEXT)
+$O/write_movie_surface_hdf5.solverstatic.o: $(FC_MODDIR)/io_server_hdf5.$(FC_MODEXT)
+$O/save_forward_arrays_hdf5.solverstatic.o: $O/io_tester.solverstatic.o $(FC_MODDIR)/io_server_hdf5.$(FC_MODEXT)
+
 $O/prepare_gravity.solverstatic.o: $O/SIEM_math_library.shared.o
 
 $O/finalize_simulation.solverstatic.o: $O/hdf5_io_server.solverstatic.o

@@ -36,6 +36,9 @@ module timing_accounting
   double precision :: t_wait_start    = 0.0d0
   double precision :: t_idle_start    = 0.0d0
 
+  ! wall-clock start of the current reporting interval (set by timing_reset)
+  double precision :: t_interval_start = 0.0d0
+
 contains
 
   subroutine timing_reset()
@@ -43,6 +46,7 @@ contains
     time_io      = 0.0d0
     time_wait_io = 0.0d0
     time_idle_io = 0.0d0
+    t_interval_start = MPI_Wtime()
   end subroutine timing_reset
 
   ! ---- compute timing ----
@@ -82,11 +86,16 @@ contains
   end subroutine timing_idle_stop
 
   ! ---- reporting (no MPI barriers) ----
-  subroutine timing_report(rank, group, is_io_node, total_elapsed)
+  !
+  ! it_start / it_end label the iteration range covered by this interval.
+  ! For movie frames use the time-step index of the frame; use 0/0 for a
+  ! residual tail interval after the last frame.
+  !
+  subroutine timing_report(rank, group, is_io_node, it_start, it_end)
     implicit none
     integer, intent(in) :: rank, group
     logical, intent(in) :: is_io_node
-    double precision, intent(in) :: total_elapsed
+    integer, intent(in) :: it_start, it_end
 
     integer :: unit_number, ierr
     character(len=80) :: filename
@@ -95,7 +104,9 @@ contains
     character(len=8)  :: date_str
     character(len=10) :: time_str
     character(len=16) :: role_str
-    double precision :: time_other, current_time
+    double precision :: time_other, current_time, total_elapsed
+
+    total_elapsed = MPI_Wtime() - t_interval_start
 
     ! compute unaccounted time
     time_other = total_elapsed - time_compute - time_io - time_wait_io - time_idle_io
@@ -127,8 +138,10 @@ contains
       return
     endif
 
-    write(unit_number, '(A,I0,A,I0,A,A,A,F14.6,A,F14.6,A,F14.6,A,F14.6,A,F14.6,A,F14.6,A,F24.12,A,A,A,A)') &
-      'mygroup: ', group, &
+    write(unit_number, '(A,I0,A,I0,A,I0,A,I0,A,A,A,F14.6,A,F14.6,A,F14.6,A,F14.6,A,F14.6,A,F14.6,A,F24.12,A,A,A,A)') &
+      'it_begin: ', it_start, &
+      ', it_end: ', it_end, &
+      ', mygroup: ', group, &
       ', myrank: ', rank, &
       ', role: ', trim(role_str), &
       ', compute (s): ', time_compute, &

@@ -1089,9 +1089,7 @@ contains
 
   integer :: status(my_status_size)
   integer :: tag, tag_src
-
-  ! timing for IO node total elapsed
-  double precision :: io_time_start
+  integer :: it_report
 
   ! vars forward undo att arrays
   ! undo attenuation
@@ -1178,7 +1176,6 @@ contains
   ! PHASE 1: COUNTER INITIALIZATION
   !---------------------------------------------------------------------------
   call timing_reset()
-  io_time_start = MPI_Wtime()
 
   ! undo attenuation
   n_recv_msg_ford_undo = 0 ! number of messages received for undo attenuation of one iteration
@@ -1755,6 +1752,10 @@ contains
           surf_frame_count = surf_frame_count + 1
           n_recv_msg_surf = 0
 
+          it_report = it_first_surf + (surf_frame_count - 1) * NTSTEP_BETWEEN_FRAMES
+          call timing_report(myrank, mygroup, .true., it_report, it_report)
+          call timing_reset()
+
           if (VERBOSE .and. IO_storage_task) then
             print *, 'io_server: completed surface frame ', surf_frame_count, '/', max_surf_frames
           endif
@@ -1780,6 +1781,10 @@ contains
           vol_frame_count = vol_frame_count + 1
           n_recv_msg_vol = 0
 
+          it_report = it_first_vol + (vol_frame_count - 1) * NTSTEP_BETWEEN_FRAMES
+          call timing_report(myrank, mygroup, .true., it_report, it_report)
+          call timing_reset()
+
           ! per-frame IO bandwidth tracking for volume movie
           call calculate_bandwidth_all_procs()
           call initialize_bytes_written()
@@ -1796,8 +1801,8 @@ contains
   ! END OF MAIN IDLING LOOP
   !---------------------------------------------------------------------------
 
-  ! timing accounting report for IO node (no barriers)
-  call timing_report(myrank, mygroup, .true., MPI_Wtime() - io_time_start)
+  ! timing accounting: residual interval after the last movie frame
+  call timing_report(myrank, mygroup, .true., 0, 0)
 
   call calculate_bandwidth_all_procs()
 
