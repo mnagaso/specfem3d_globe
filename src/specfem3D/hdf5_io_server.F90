@@ -677,7 +677,7 @@ contains
   integer, dimension(sizeval) :: n_procs_on_node ! number of procs on each cluster node
   integer, dimension(:), allocatable :: n_ionode_on_cluster ! number of ionode on the cluster nodes
   integer :: i,j,c,n_cluster_node,my_cluster_id,n_rest_io,n_ionode,n_comp_node
-  integer :: comp_rank_counter, dest_io_id, idx
+  integer :: dest_io_id, idx
   real(kind=CUSTOM_REAL) :: io_ratio ! dum
   character(len=MAX_STRING_LEN), dimension(sizeval) :: dump_node_names ! names of cluster nodes
 
@@ -766,7 +766,6 @@ contains
 
   !! choose the io node from the last rank of each cluster node
   n_ionode = 0
-  comp_rank_counter = -1
 
   ! allocate and initialize IO-to-compute mapping arrays
   if (HDF5_IO_NODES > 0) then
@@ -806,13 +805,14 @@ contains
 
         else
           ! j is compute node
-          comp_rank_counter = comp_rank_counter + 1
           dest_io_id = mod(c-1,n_ionode_on_cluster(i)) + n_ionode
 
           if (HDF5_IO_NODES > 0) then
             idx = io_nproc_all(dest_io_id+1) + 1
             io_nproc_all(dest_io_id+1) = idx
-            io_compute_ranks(dest_io_id+1,idx) = comp_rank_counter
+            ! store inter-communicator compute rank (== world rank), not a
+            ! per-node sequential index; offset arrays and tag_src use this rank
+            io_compute_ranks(dest_io_id+1,idx) = j-1
           endif
 
           if (j-1 == myrank) then
