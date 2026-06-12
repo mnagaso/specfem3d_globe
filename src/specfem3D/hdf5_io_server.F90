@@ -677,7 +677,8 @@ contains
   integer, dimension(sizeval) :: n_procs_on_node ! number of procs on each cluster node
   integer, dimension(:), allocatable :: n_ionode_on_cluster ! number of ionode on the cluster nodes
   integer :: i,j,c,n_cluster_node,my_cluster_id,n_rest_io,n_ionode,n_comp_node
-  integer :: dest_io_id, idx
+  integer :: dest_io_id, idx, io_base_id
+  integer, dimension(:), allocatable :: io_world_by_shard
   real(kind=CUSTOM_REAL) :: io_ratio ! dum
   character(len=MAX_STRING_LEN), dimension(sizeval) :: dump_node_names ! names of cluster nodes
 
@@ -775,10 +776,13 @@ contains
     if (.not. allocated(io_compute_ranks)) then
       allocate(io_compute_ranks(HDF5_IO_NODES,sizeval))
     endif
+    allocate(io_world_by_shard(0:HDF5_IO_NODES-1))
     io_nproc_all(:) = 0
+    io_world_by_shard(:) = -1
   endif
   do i = 1, n_cluster_node
     c = 0
+    io_base_id = n_ionode
     ! number of compute node on this cluster node
     n_comp_node = n_procs_on_node(i) - n_ionode_on_cluster(i)
     do j = 1, sizeval
@@ -801,11 +805,15 @@ contains
           ! rank of io_start
           if (n_ionode == 0) io_start = j-1
 
+          if (HDF5_IO_NODES > 0) then
+            io_world_by_shard(n_ionode) = j-1
+          endif
+
           n_ionode = n_ionode+1
 
         else
           ! j is compute node
-          dest_io_id = mod(c-1,n_ionode_on_cluster(i)) + n_ionode
+          dest_io_id = mod(c-1,n_ionode_on_cluster(i)) + io_base_id
 
           if (HDF5_IO_NODES > 0) then
             idx = io_nproc_all(dest_io_id+1) + 1
@@ -827,11 +835,24 @@ contains
     enddo
   enddo
 
+  if (HDF5_IO_NODES > 0) then
+    if (n_ionode /= HDF5_IO_NODES) then
+      if (myrank == 0) then
+        print *, 'Error select_io_node: assigned', n_ionode, 'IO ranks but HDF5_IO_NODES =', HDF5_IO_NODES
+      endif
+      stop 'select_io_node: IO rank count mismatch'
+    endif
+    if (HDF5_IO_NODES > 1) then
+      call remap_io_ids_for_inter_comm(io_world_by_shard, sizeval)
+    endif
+    deallocate(io_world_by_shard)
+  endif
+
   ! debug
   if (VERBOSE) then
     if (myrank == 0) then
       print *, "io_server: n_procs_on_node", n_procs_on_node(:)
-      print *, "io_server: n_ionode_on_cluster", n_ionode_on_cluster
+      print *, "io_server: n_ionode_on_cluster", n_ionode_on_cluster(1:n_cluster_node)
       print *
     endif
     call flush_stdout()
@@ -862,6 +883,80 @@ contains
   deallocate(n_ionode_on_cluster)
 
   end subroutine select_io_node
+
+  subroutine remap_io_ids_for_inter_comm(io_world_by_shard, sizeval)
+
+  use specfem_par, only: myrank
+
+  implicit none
+
+  integer, intent(in) :: io_world_by_shard(0:HDF5_IO_NODES-1)
+  integer, intent(in) :: sizeval
+  integer, dimension(HDF5_IO_NODES) :: io_world_sorted
+  integer, dimension(0:HDF5_IO_NODES-1) :: shard_to_inter
+  integer, allocatable :: io_compute_ranks_tmp(:,:)
+  integer, allocatable :: io_nproc_all_tmp(:)
+  integer :: s, p, q, r, n, old_my_io, old_dest
+
+  if (HDF5_IO_NODES <= 1) return
+
+  do s = 0, HDF5_IO_NODES-1
+    if (io_world_by_shard(s) < 0) then
+      if (myrank == 0) print *, 'Error select_io_node: missing IO rank for logical shard', s
+      stop 'select_io_node: incomplete IO shard map'
+    endif
+  enddo
+
+  io_world_sorted(1:HDF5_IO_NODES) = io_world_by_shard(0:HDF5_IO_NODES-1)
+  do p = 2, HDF5_IO_NODES
+    q = io_world_sorted(p)
+    r = p - 1
+    do while (r >= 1 .and. io_world_sorted(r) > q)
+      io_world_sorted(r+1) = io_world_sorted(r)
+      r = r - 1
+    enddo
+    io_world_sorted(r+1) = q
+  enddo
+
+  shard_to_inter = -1
+  do s = 0, HDF5_IO_NODES-1
+    do p = 1, HDF5_IO_NODES
+      if (io_world_sorted(p) == io_world_by_shard(s)) then
+        shard_to_inter(s) = p - 1
+        exit
+      endif
+    enddo
+    if (shard_to_inter(s) < 0) stop 'select_io_node: remap IO shard failed'
+  enddo
+
+  if (allocated(io_compute_ranks)) then
+    allocate(io_compute_ranks_tmp(HDF5_IO_NODES,sizeval))
+    allocate(io_nproc_all_tmp(HDF5_IO_NODES))
+    io_compute_ranks_tmp = 0
+    io_nproc_all_tmp = 0
+    do s = 0, HDF5_IO_NODES-1
+      n = shard_to_inter(s)
+      io_nproc_all_tmp(n+1) = io_nproc_all(s+1)
+      if (io_nproc_all(s+1) > 0) then
+        io_compute_ranks_tmp(n+1,1:io_nproc_all(s+1)) = io_compute_ranks(s+1,1:io_nproc_all(s+1))
+      endif
+    enddo
+    io_nproc_all = io_nproc_all_tmp
+    io_compute_ranks = io_compute_ranks_tmp
+    deallocate(io_compute_ranks_tmp, io_nproc_all_tmp)
+  endif
+
+  if (IO_storage_task) then
+    old_my_io = my_io_id
+    my_io_id = shard_to_inter(old_my_io)
+  endif
+
+  if (IO_compute_task) then
+    old_dest = dest_ionod
+    dest_ionod = shard_to_inter(old_dest)
+  endif
+
+  end subroutine remap_io_ids_for_inter_comm
 
   integer function io_local_compute_count()
 
