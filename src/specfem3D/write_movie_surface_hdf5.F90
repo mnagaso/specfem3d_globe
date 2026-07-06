@@ -276,6 +276,7 @@ subroutine write_movie_surface_hdf5()
   use specfem_par_movie
   use specfem_par_movie_hdf5
   use io_server_hdf5
+  use timing_accounting
 
   implicit none
 
@@ -431,7 +432,11 @@ subroutine write_movie_surface_hdf5()
 
     ! wait for current frame's sends to complete before returning to time loop
     ! (prevents MPI resource conflict between inter-communicator and compute-only communicator)
+    call timing_io_stop()
+    call timing_wait_start()
     call wait_all_send()
+    call timing_wait_stop()
+    call timing_io_start()
 
     ! in multi-IO mode, XDMF is generated once per shard by
     ! write_xdmf_surface_shards() and does not need per-step appends

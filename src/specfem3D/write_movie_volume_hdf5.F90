@@ -539,6 +539,7 @@
   use specfem_par_movie_hdf5
   use io_server_hdf5
   use io_bandwidth, only: start_timer,stop_timer,set_bytes_written_from_array
+  use timing_accounting
 #endif
 
   implicit none
@@ -669,7 +670,11 @@
     ! communicator (compute<->IO) and the compute-only communicator (boundary exchange).
     ! Without this, the boundary exchange in compute_forces_* can fail with SIGSEGV
     ! when large volume movie data is still being transferred.
+    call timing_io_stop()
+    call timing_wait_start()
     call wait_all_send()
+    call timing_wait_stop()
+    call timing_io_start()
 
   else
 
@@ -1041,6 +1046,7 @@
   use specfem_par_movie_hdf5
   use io_server_hdf5
   use io_bandwidth, only: start_timer,stop_timer,set_bytes_written_from_array
+  use timing_accounting
 #endif
 
   implicit none
@@ -1148,7 +1154,11 @@
     ! CRITICAL FIX: Wait for all volume movie sends to complete before returning
     ! to the time loop. This prevents MPI resource conflicts between the inter-
     ! communicator (compute<->IO) and the compute-only communicator (boundary exchange).
+    call timing_io_stop()
+    call timing_wait_start()
     call wait_all_send()
+    call timing_wait_stop()
+    call timing_io_start()
 
   else
 
@@ -1236,6 +1246,7 @@
   use io_server_hdf5, only: io_tag_vol_norm_cm, io_tag_vol_norm_oc, io_tag_vol_norm_ic, &
                             dest_ionod, n_req_vol, req_dump_vol, wait_all_send
   use io_bandwidth, only: start_timer,stop_timer,set_bytes_written_from_array
+  use timing_accounting
 #endif
 
   implicit none
@@ -1335,7 +1346,11 @@
     endif
 
     ! wait for all sends to complete before returning to time loop
+    call timing_io_stop()
+    call timing_wait_start()
     call wait_all_send()
+    call timing_wait_stop()
+    call timing_io_start()
 
   else
 
@@ -1449,6 +1464,7 @@
   use io_server_hdf5, only: io_tag_vol_norm_cm, io_tag_vol_norm_oc, io_tag_vol_norm_ic, &
                             dest_ionod, n_req_vol, req_dump_vol, wait_all_send
   use io_bandwidth, only: start_timer,stop_timer,set_bytes_written_from_array
+  use timing_accounting
 #endif
 
   implicit none
@@ -1548,7 +1564,11 @@
     endif
 
     ! wait for all sends to complete before returning to time loop
+    call timing_io_stop()
+    call timing_wait_start()
     call wait_all_send()
+    call timing_wait_stop()
+    call timing_io_start()
 
   else
 
@@ -1660,6 +1680,7 @@
   use io_server_hdf5, only: io_tag_vol_norm_cm, io_tag_vol_norm_oc, io_tag_vol_norm_ic, &
                             dest_ionod, n_req_vol, req_dump_vol, wait_all_send
   use io_bandwidth, only: start_timer,stop_timer,set_bytes_written_from_array
+  use timing_accounting
 #endif
 
   implicit none
@@ -1762,7 +1783,11 @@
     endif
 
     ! wait for all sends to complete before returning to time loop
+    call timing_io_stop()
+    call timing_wait_start()
     call wait_all_send()
+    call timing_wait_stop()
+    call timing_io_start()
 
   else
 
