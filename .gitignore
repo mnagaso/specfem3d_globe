@@ -32,3 +32,8 @@ slurm*
 submit*
 *mod
 /tmp_validation/
+
+
+*.err
+*.out
+*.stats
