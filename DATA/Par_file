@@ -469,3 +469,17 @@ IO_ADAPTIVE_THROTTLE            = .false.
 # When enabled, reads OUTPUT_FILES/io_throttle_control.txt before each checkpoint
 # to allow external processes (e.g., digital twin) to adjust throttle parameters
 IO_RUNTIME_THROTTLE_CONTROL     = .false.
+
+# Synchronize all simultaneous runs at each checkpoint, then stagger writes
+IO_COORDINATED_CHECKPOINT_BARRIERS = .false.
+
+# Spacing between adjacent run groups in seconds (0 = use IO_PRE_CHECKPOINT_DELAY_SEC)
+IO_CHECKPOINT_SPACING_SEC       = 0.d0
+
+# Stagger mode: none | fixed_group | arrival_order | coordinated
+# Leave empty to keep legacy behavior (fixed_group, or coordinated if barriers=.true.)
+IO_STAGGER_MODE                 = fixed_group
+# On arrival-order scheduler failure: abort | fixed_group | none
+IO_ARRIVAL_ORDER_FALLBACK       = abort
+# POSIX shared-memory directory for arrival-order state (must stay off the target HDD)
+IO_ARRIVAL_ORDER_STATE_DIR      = /dev/shm

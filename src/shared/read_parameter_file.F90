@@ -388,6 +388,11 @@
   call read_value_integer(IO_MAX_BANDWIDTH_MBPS, 'IO_MAX_BANDWIDTH_MBPS', ier); ier = 0
   call read_value_logical(IO_ADAPTIVE_THROTTLE, 'IO_ADAPTIVE_THROTTLE', ier); ier = 0
   call read_value_logical(IO_RUNTIME_THROTTLE_CONTROL, 'IO_RUNTIME_THROTTLE_CONTROL', ier); ier = 0
+  call read_value_logical(IO_COORDINATED_CHECKPOINT_BARRIERS, 'IO_COORDINATED_CHECKPOINT_BARRIERS', ier); ier = 0
+  call read_value_double_precision(IO_CHECKPOINT_SPACING_SEC, 'IO_CHECKPOINT_SPACING_SEC', ier); ier = 0
+  call read_value_string(IO_STAGGER_MODE, 'IO_STAGGER_MODE', ier); ier = 0
+  call read_value_string(IO_ARRIVAL_ORDER_FALLBACK, 'IO_ARRIVAL_ORDER_FALLBACK', ier); ier = 0
+  call read_value_string(IO_ARRIVAL_ORDER_STATE_DIR, 'IO_ARRIVAL_ORDER_STATE_DIR', ier); ier = 0
 
   ! HDF5 file I/O
   ! (optional) hdf5 database io flag

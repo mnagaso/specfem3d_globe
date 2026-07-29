@@ -226,6 +226,18 @@
   ! Enable runtime throttle control via control file
   logical :: IO_RUNTIME_THROTTLE_CONTROL = .false.
 
+  ! Coordinated checkpoint barriers across simultaneous runs (Part D step 7)
+  logical :: IO_COORDINATED_CHECKPOINT_BARRIERS = .false.
+  ! Target spacing between adjacent run groups (0 = use IO_PRE_CHECKPOINT_DELAY_SEC)
+  double precision :: IO_CHECKPOINT_SPACING_SEC = 0.d0
+  ! Stagger mode: none | fixed_group | arrival_order | coordinated
+  ! Empty string keeps backward-compatible behavior from other flags.
+  character(len=MAX_STRING_LEN) :: IO_STAGGER_MODE = ''
+  ! arrival-order failure policy: abort | fixed_group | none
+  character(len=MAX_STRING_LEN) :: IO_ARRIVAL_ORDER_FALLBACK = 'abort'
+  ! Shared-memory directory for arrival-order scheduler state (must be /dev/shm*)
+  character(len=MAX_STRING_LEN) :: IO_ARRIVAL_ORDER_STATE_DIR = '/dev/shm'
+
   ! HDF5 file i/o
   logical :: HDF5_ENABLED      = .false. ! for all databases i/o in hdf5
   logical :: HDF5_FOR_MOVIES   = .false. ! for movies (shakemap, surface movies, volume movies) ! TODO: HDF5 not used

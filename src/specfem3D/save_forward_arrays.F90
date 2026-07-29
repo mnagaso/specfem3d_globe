@@ -221,7 +221,10 @@
   use specfem_par_outercore
   use specfem_par_full_gravity
   use io_throttle, only: io_throttle_apply_pre_checkpoint_delay, &
-                         io_throttle_apply_post_write_delay
+                         io_throttle_apply_post_write_delay, &
+                         io_throttle_coordinated_post_checkpoint, &
+                         io_throttle_record_write_timing, &
+                         io_throttle_maybe_fsync_after_checkpoint
 
   implicit none
 
@@ -370,8 +373,17 @@
     endif
   endif
 
+  ! Optional: flush dirty pages before compute resumes (causal test)
+  call io_throttle_maybe_fsync_after_checkpoint(myrank)
+
   ! Apply post-write delay for bandwidth enforcement and adaptive feedback
   call io_throttle_apply_post_write_delay(myrank, bytes_written_this_rank, write_elapsed)
+
+  ! Record arrival/start/end timing for scheduler analysis
+  call io_throttle_record_write_timing(myrank, bytes_written_this_rank, write_elapsed)
+
+  ! Align all simultaneous runs after checkpoint I/O completes
+  call io_throttle_coordinated_post_checkpoint(myrank, iteration_on_subset)
 
   end subroutine save_forward_arrays_undoatt
 
