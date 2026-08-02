@@ -234,11 +234,6 @@
   call bcast_all_singlei(IO_MAX_BANDWIDTH_MBPS)
   call bcast_all_singlel(IO_ADAPTIVE_THROTTLE)
   call bcast_all_singlel(IO_RUNTIME_THROTTLE_CONTROL)
-  call bcast_all_singlel(IO_COORDINATED_CHECKPOINT_BARRIERS)
-  call bcast_all_singledp(IO_CHECKPOINT_SPACING_SEC)
-  call bcast_all_ch(IO_STAGGER_MODE, len(IO_STAGGER_MODE))
-  call bcast_all_ch(IO_ARRIVAL_ORDER_FALLBACK, len(IO_ARRIVAL_ORDER_FALLBACK))
-  call bcast_all_ch(IO_ARRIVAL_ORDER_STATE_DIR, len(IO_ARRIVAL_ORDER_STATE_DIR))
 
   ! empirical minimum period resolved estimation
   call bcast_all_singledp(T_min_period)

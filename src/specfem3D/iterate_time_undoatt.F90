@@ -350,6 +350,9 @@
   ! loops over time subsets
   do iteration_on_subset = 1, NSUBSET_ITERATIONS
 
+    ! track iteration range for this subset
+    it_timing_begin = it + 1
+
     ! wavefield storage
     if (SIMULATION_TYPE == 1 .and. SAVE_FORWARD) then
       ! saves forward wavefields
@@ -357,30 +360,16 @@
       call save_forward_arrays_undoatt()
       call timing_io_stop()
 
-      ! checkpoint timing (interval since last reset is checkpoint IO only)
-      call timing_report(myrank, mygroup, .false., it + 1, it + 1)
-      call timing_reset()
-      it_timing_begin = it + 1
-
     else if (SIMULATION_TYPE == 3) then
       ! reads in last stored forward wavefield
       call timing_io_start()
       call read_forward_arrays_undoatt()
       call timing_io_stop()
 
-      ! checkpoint read timing (interval since last reset is checkpoint IO only)
-      call timing_report(myrank, mygroup, .false., it + 1, it + 1)
-      call timing_reset()
-      it_timing_begin = it + 1
-
       ! note: after reading the restart files of displacement back from disk, recompute the strain from displacement;
       !       this is better than storing the strain to disk as well, which would drastically increase I/O volume
       ! computes strain based on current backward/reconstructed wavefield
       if (COMPUTE_AND_STORE_STRAIN) call compute_strain_att_backward()
-
-    else
-      ! track iteration range for subsets without checkpoint IO at this boundary
-      it_timing_begin = it + 1
     endif
 
     ! time loop within this iteration subset
@@ -765,18 +754,11 @@
   use io_throttle, only: io_throttle_init, &
                          IO_PRE_CHECKPOINT_DELAY_SEC, IO_MAX_BANDWIDTH_MBPS, &
                          IO_ADAPTIVE_THROTTLE, IO_RUNTIME_THROTTLE_CONTROL, &
-                         IO_COORDINATED_CHECKPOINT_BARRIERS, IO_CHECKPOINT_SPACING_SEC, &
-                         IO_STAGGER_MODE, IO_ARRIVAL_ORDER_FALLBACK, IO_ARRIVAL_ORDER_STATE_DIR, &
                          OUTPUT_FILES_DIR
   use shared_input_parameters, only: IO_PRE_CHECKPOINT_DELAY_SEC_PAR => IO_PRE_CHECKPOINT_DELAY_SEC, &
                                      IO_MAX_BANDWIDTH_MBPS_PAR => IO_MAX_BANDWIDTH_MBPS, &
                                      IO_ADAPTIVE_THROTTLE_PAR => IO_ADAPTIVE_THROTTLE, &
                                      IO_RUNTIME_THROTTLE_CONTROL_PAR => IO_RUNTIME_THROTTLE_CONTROL, &
-                                     IO_COORDINATED_CHECKPOINT_BARRIERS_PAR => IO_COORDINATED_CHECKPOINT_BARRIERS, &
-                                     IO_CHECKPOINT_SPACING_SEC_PAR => IO_CHECKPOINT_SPACING_SEC, &
-                                     IO_STAGGER_MODE_PAR => IO_STAGGER_MODE, &
-                                     IO_ARRIVAL_ORDER_FALLBACK_PAR => IO_ARRIVAL_ORDER_FALLBACK, &
-                                     IO_ARRIVAL_ORDER_STATE_DIR_PAR => IO_ARRIVAL_ORDER_STATE_DIR, &
                                      OUTPUT_FILES
 
   implicit none
@@ -788,11 +770,6 @@
   IO_MAX_BANDWIDTH_MBPS = IO_MAX_BANDWIDTH_MBPS_PAR
   IO_ADAPTIVE_THROTTLE = IO_ADAPTIVE_THROTTLE_PAR
   IO_RUNTIME_THROTTLE_CONTROL = IO_RUNTIME_THROTTLE_CONTROL_PAR
-  IO_COORDINATED_CHECKPOINT_BARRIERS = IO_COORDINATED_CHECKPOINT_BARRIERS_PAR
-  IO_CHECKPOINT_SPACING_SEC = IO_CHECKPOINT_SPACING_SEC_PAR
-  IO_STAGGER_MODE = IO_STAGGER_MODE_PAR
-  IO_ARRIVAL_ORDER_FALLBACK = IO_ARRIVAL_ORDER_FALLBACK_PAR
-  IO_ARRIVAL_ORDER_STATE_DIR = IO_ARRIVAL_ORDER_STATE_DIR_PAR
   OUTPUT_FILES_DIR = OUTPUT_FILES
 
   ! Initialize the module (pass mygroup for staggered delay)
