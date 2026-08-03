@@ -34,6 +34,7 @@
   use specfem_par_innercore
   use specfem_par_movie
   use specfem_par_full_gravity
+  use timing_accounting
 
   implicit none
 
@@ -112,7 +113,9 @@
         if (GPU_ASYNC_COPY .and. iphase == 2) then
           ! crust/mantle region
           ! wait for asynchronous copy to finish
+          call timing_boun_d2h_start()
           call sync_copy_from_device(Mesh_pointer,iphase,buffer_send_vector_crust_mantle,IREGION_CRUST_MANTLE,1)
+          call timing_boun_d2h_stop()
           ! sends MPI buffers
           call assemble_MPI_vector_send_gpu(NPROCTOT_VAL, &
                         buffer_send_vector_crust_mantle,buffer_recv_vector_crust_mantle, &
@@ -132,7 +135,9 @@
           if (GPU_ASYNC_COPY .and. iphase == 2) then
             ! inner core region
             ! wait for asynchronous copy to finish
+            call timing_boun_d2h_start()
             call sync_copy_from_device(Mesh_pointer,iphase,buffer_send_vector_inner_core,IREGION_INNER_CORE,1)
+            call timing_boun_d2h_stop()
             ! sends MPI buffers
             call assemble_MPI_vector_send_gpu(NPROCTOT_VAL, &
                           buffer_send_vector_inner_core,buffer_recv_vector_inner_core, &
@@ -231,13 +236,18 @@
           ! note: in case of asynchronous copy, this transfers boundary region to host asynchronously. The
           !       MPI-send is done after compute_forces_viscoelastic_gpu,
           !       once the inner element kernels are launched, and the memcpy has finished.
+          if (.not. GPU_ASYNC_COPY) call timing_boun_d2h_start()
           call transfer_boun_from_device(Mesh_pointer, &
                                          buffer_send_vector_crust_mantle, &
                                          IREGION_CRUST_MANTLE,1)
-          if (NSPEC_INNER_CORE > 0) &
+          if (.not. GPU_ASYNC_COPY) call timing_boun_d2h_stop()
+          if (NSPEC_INNER_CORE > 0) then
+            if (.not. GPU_ASYNC_COPY) call timing_boun_d2h_start()
             call transfer_boun_from_device(Mesh_pointer, &
                                            buffer_send_vector_inner_core, &
                                            IREGION_INNER_CORE,1)
+            if (.not. GPU_ASYNC_COPY) call timing_boun_d2h_stop()
+          endif
 
           if (.not. GPU_ASYNC_COPY) then
             ! for synchronous transfers, sending over MPI can directly proceed
@@ -374,6 +384,7 @@
   use specfem_par_innercore
   use specfem_par_movie
   use specfem_par_full_gravity
+  use timing_accounting
 
   implicit none
 
@@ -485,7 +496,9 @@
       if (GPU_ASYNC_COPY .and. iphase == 2) then
         ! crust/mantle region
         ! wait for asynchronous copy to finish
+        call timing_boun_d2h_start()
         call sync_copy_from_device(Mesh_pointer,iphase,b_buffer_send_vector_cm,IREGION_CRUST_MANTLE,3)
+        call timing_boun_d2h_stop()
         ! sends MPI buffers
         call assemble_MPI_vector_send_gpu(NPROCTOT_VAL, &
                       b_buffer_send_vector_cm,b_buffer_recv_vector_cm, &
@@ -503,7 +516,9 @@
         if (GPU_ASYNC_COPY .and. iphase == 2) then
           ! inner core region
           ! wait for asynchronous copy to finish
+          call timing_boun_d2h_start()
           call sync_copy_from_device(Mesh_pointer,iphase,b_buffer_send_vector_inner_core,IREGION_INNER_CORE,3)
+          call timing_boun_d2h_stop()
 
           ! sends MPI buffers
           call assemble_MPI_vector_send_gpu(NPROCTOT_VAL, &
@@ -590,13 +605,18 @@
         ! note: in case of asynchronous copy, this transfers boundary region to host asynchronously. The
         !       MPI-send is done after compute_forces_viscoelastic_gpu,
         !       once the inner element kernels are launched, and the memcpy has finished.
+        if (.not. GPU_ASYNC_COPY) call timing_boun_d2h_start()
         call transfer_boun_from_device(Mesh_pointer, &
                                        b_buffer_send_vector_cm, &
                                        IREGION_CRUST_MANTLE,3)
-        if (NSPEC_INNER_CORE > 0) &
+        if (.not. GPU_ASYNC_COPY) call timing_boun_d2h_stop()
+        if (NSPEC_INNER_CORE > 0) then
+          if (.not. GPU_ASYNC_COPY) call timing_boun_d2h_start()
           call transfer_boun_from_device(Mesh_pointer, &
                                          b_buffer_send_vector_inner_core, &
                                          IREGION_INNER_CORE,3)
+          if (.not. GPU_ASYNC_COPY) call timing_boun_d2h_stop()
+        endif
 
         if (.not. GPU_ASYNC_COPY) then
           ! for synchronous transfers, sending over MPI can directly proceed

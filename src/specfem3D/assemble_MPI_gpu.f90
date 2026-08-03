@@ -99,6 +99,7 @@
 ! waits for send/receiver to be completed and assembles contributions
 
   use constants, only: CUSTOM_REAL
+  use timing_accounting
 
   implicit none
 
@@ -124,8 +125,10 @@
       call wait_req(request_recv_scalar(iinterface))
     enddo
 
-    ! adding contributions of neighbors
+    ! adding contributions of neighbors (includes H2D wait / blocking memcpy)
+    call timing_boun_h2d_start()
     call transfer_asmbl_pot_to_device(Mesh_pointer,buffer_recv_scalar,FORWARD_OR_ADJOINT)
+    call timing_boun_h2d_stop()
 
     ! note: adding contributions of neighbors has been done just above for gpu
     !do iinterface = 1, num_interfaces
@@ -281,6 +284,7 @@
 ! waits for data to receive and assembles
 
   use constants, only: CUSTOM_REAL,NDIM
+  use timing_accounting
 
   implicit none
 
@@ -309,10 +313,12 @@
       call wait_req(request_recv_vector(iinterface))
     enddo
 
-    ! adding contributions of neighbors
+    ! adding contributions of neighbors (includes H2D wait / blocking memcpy)
+    call timing_boun_h2d_start()
     call transfer_asmbl_accel_to_device(Mesh_pointer, &
                                         buffer_recv_vector, &
                                         IREGION,FORWARD_OR_ADJOINT)
+    call timing_boun_h2d_stop()
 
     ! This step is done via previous function transfer_and_assemble...
     ! do iinterface = 1, num_interfaces

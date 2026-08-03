@@ -34,6 +34,8 @@
   use specfem_par_movie, only: div_displ_outer_core
   use specfem_par_full_gravity, only: pgrav_oc
 
+  use timing_accounting
+
   implicit none
 
   ! local parameters
@@ -94,7 +96,9 @@
         if (GPU_ASYNC_COPY .and. iphase == 2) then
           ! crust/mantle region
           ! wait for asynchronous copy to finish
+          call timing_boun_d2h_start()
           call sync_copy_from_device(Mesh_pointer,iphase,buffer_send_scalar_outer_core,IREGION_OUTER_CORE,1)
+          call timing_boun_d2h_stop()
           ! sends MPI buffers
           call assemble_MPI_scalar_send_gpu(NPROCTOT_VAL, &
                                             buffer_send_scalar_outer_core,buffer_recv_scalar_outer_core, &
@@ -142,7 +146,9 @@
           ! note: for asynchronous transfers, this transfers boundary region to host asynchronously. The
           !       MPI-send is done after compute_forces_outer_core_gpu,
           !       once the inner element kernels are launched, and the memcpy has finished.
+          if (.not. GPU_ASYNC_COPY) call timing_boun_d2h_start()
           call transfer_boun_pot_from_device(Mesh_pointer,buffer_send_scalar_outer_core,1)
+          if (.not. GPU_ASYNC_COPY) call timing_boun_d2h_stop()
 
           if (.not. GPU_ASYNC_COPY) then
             ! for synchronous transfers, sending over MPI can directly proceed
@@ -226,6 +232,8 @@
   use specfem_par_outercore
   use specfem_par_movie, only: div_displ_outer_core
   use specfem_par_full_gravity, only: b_pgrav_oc
+
+  use timing_accounting
 
   implicit none
 
@@ -319,7 +327,9 @@
       if (GPU_ASYNC_COPY .and. iphase == 2) then
         ! crust/mantle region
         ! wait for asynchronous copy to finish
+        call timing_boun_d2h_start()
         call sync_copy_from_device(Mesh_pointer,iphase,b_buffer_send_scalar_outer_core,IREGION_OUTER_CORE,3)
+        call timing_boun_d2h_stop()
         ! sends MPI buffers
         call assemble_MPI_scalar_send_gpu(NPROCTOT_VAL, &
                               b_buffer_send_scalar_outer_core,b_buffer_recv_scalar_outer_core, &
@@ -374,7 +384,9 @@
         ! note: for asynchronous transfers, this transfers boundary region to host asynchronously. The
         !       MPI-send is done after compute_forces_outer_core_gpu,
         !       once the inner element kernels are launched, and the memcpy has finished.
+        if (.not. GPU_ASYNC_COPY) call timing_boun_d2h_start()
         call transfer_boun_pot_from_device(Mesh_pointer,b_buffer_send_scalar_outer_core,3)
+        if (.not. GPU_ASYNC_COPY) call timing_boun_d2h_stop()
 
         if (.not. GPU_ASYNC_COPY) then
           ! for synchronous transfers, sending over MPI can directly proceed
