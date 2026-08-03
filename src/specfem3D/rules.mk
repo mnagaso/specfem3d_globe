@@ -491,6 +491,9 @@ $O/iterate_time.solverstatic.o: $O/timing_accounting.solverstatic.o
 $O/iterate_time_undoatt.solverstatic.o: $O/timing_accounting.solverstatic.o
 $O/save_forward_arrays_hdf5.solverstatic.o: $O/timing_accounting.solverstatic.o
 $O/hdf5_io_server.solverstatic.o: $O/timing_accounting.solverstatic.o
+$O/compute_forces_viscoelastic_calling_routine.solverstatic.o: $O/timing_accounting.solverstatic.o
+$O/compute_forces_acoustic_calling_routine.solverstatic.o: $O/timing_accounting.solverstatic.o
+$O/assemble_MPI_gpu.solver.o: $O/timing_accounting.solverstatic.o
 
 ###
 ### specfem3D - optimized flags and dependence on values from mesher here

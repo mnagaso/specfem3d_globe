@@ -122,6 +122,33 @@ Always **zero for IO server ranks** — the IO server performs no physics.
 
 ---
 
+### `boun_d2h (s)` / `boun_h2d (s)`
+
+Wall-clock time for **MPI boundary buffer** GPU↔CPU transfers during assemble
+(nested inside `compute (s)`; **not** subtracted from `other`).
+
+Default `GPU_ASYNC_COPY = .true.`:
+
+| Field | What is timed |
+|-------|----------------|
+| `boun_d2h` | `sync_copy_from_device` — wait for async Device→Host of send buffers |
+| `boun_h2d` | `transfer_asmbl_*_to_device` — wait on copy stream + assemble kernel launch |
+
+If `GPU_ASYNC_COPY = .false.`:
+
+| Field | What is timed |
+|-------|----------------|
+| `boun_d2h` | blocking `transfer_boun_*_from_device` |
+| `boun_h2d` | blocking H2D inside `transfer_asmbl_*` |
+
+**Sources:** `compute_forces_{viscoelastic,acoustic}_calling_routine.F90`,
+`assemble_MPI_gpu.f90`.
+
+Compare interval sums (e.g. delay=0 vs 0.5) of `boun_d2h` / `boun_h2d` on
+`timing_acct_group*_compute_rank0.txt` to see if boundary PCIe traffic slowed.
+
+---
+
 ### `io (s)`
 
 **For compute ranks**: wall-clock time inside IO operations — seismogram writes,
