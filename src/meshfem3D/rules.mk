@@ -232,6 +232,7 @@ meshfem3D_SHARED_OBJECTS = \
 	$O/model_Sohl.shared.o \
 	$O/model_topo_bathy.shared.o \
 	$O/model_vpremoon.shared.o \
+	$O/arrival_order_scheduler.cc.o \
 	$O/parallel.sharedmpi.o \
 	$O/param_reader.cc.o \
 	$O/read_compute_parameters.shared.o \

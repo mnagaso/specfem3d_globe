@@ -193,6 +193,7 @@ xcombine_paraview_strain_data_SHARED_OBJECTS = \
 	$O/shared_par.shared_module.o \
 	$O/specfem3D_par.solverstatic_module.o \
 	$O/read_mesh_parameters.solverstatic.o \
+	$O/arrival_order_scheduler.cc.o \
 	$O/parallel.sharedmpi.o \
 	$O/auto_ner.shared.o \
 	$O/calendar.shared.o \
@@ -231,6 +232,7 @@ xcombine_surf_data_SHARED_OBJECTS = \
 	$O/shared_par.shared_module.o \
 	$O/specfem3D_par.solverstatic_module.o \
 	$O/read_mesh_parameters.solverstatic.o \
+	$O/arrival_order_scheduler.cc.o \
 	$O/parallel.sharedmpi.o \
 	$O/read_parameter_file.shared.o \
 	$O/read_value_parameters.shared.o \
@@ -255,6 +257,7 @@ xcombine_surf_data_vtk_SHARED_OBJECTS = \
 	$O/shared_par.shared_module.o \
 	$O/specfem3D_par.solverstatic_module.o \
 	$O/read_mesh_parameters.solverstatic.o \
+	$O/arrival_order_scheduler.cc.o \
 	$O/parallel.sharedmpi.o \
 	$O/read_parameter_file.shared.o \
 	$O/read_value_parameters.shared.o \
@@ -307,6 +310,7 @@ xcombine_vol_data_SHARED_OBJECTS = \
 	$O/model_prem.shared.o \
 	$O/model_Sohl.shared.o \
 	$O/model_vpremoon.shared.o \
+	$O/arrival_order_scheduler.cc.o \
 	$O/parallel.sharedmpi.o \
 	$O/read_parameter_file.shared.o \
 	$O/read_value_parameters.shared.o \
@@ -348,6 +352,7 @@ xcombine_vol_data_adios_SHARED_OBJECTS = \
 	$O/model_prem.shared.o \
 	$O/model_Sohl.shared.o \
 	$O/model_vpremoon.shared.o \
+	$O/arrival_order_scheduler.cc.o \
 	$O/parallel.sharedmpi.o \
 	$O/read_parameter_file.shared.o \
 	$O/read_value_parameters.shared.o \
@@ -385,6 +390,7 @@ xcombine_vol_data_vtk_SHARED_OBJECTS = \
 	$O/model_prem.shared.o \
 	$O/model_Sohl.shared.o \
 	$O/model_vpremoon.shared.o \
+	$O/arrival_order_scheduler.cc.o \
 	$O/parallel.sharedmpi.o \
 	$O/read_parameter_file.shared.o \
 	$O/read_value_parameters.shared.o \
@@ -427,6 +433,7 @@ xcombine_vol_data_vtk_adios_SHARED_OBJECTS = \
 	$O/model_prem.shared.o \
 	$O/model_Sohl.shared.o \
 	$O/model_vpremoon.shared.o \
+	$O/arrival_order_scheduler.cc.o \
 	$O/parallel.sharedmpi.o \
 	$O/read_parameter_file.shared.o \
 	$O/read_value_parameters.shared.o \
@@ -554,6 +561,7 @@ xextract_database_OBJECTS = \
 xextract_database_SHARED_OBJECTS = \
 	$O/shared_par.shared_module.o \
 	$O/read_mesh_parameters.solverstatic.o \
+	$O/arrival_order_scheduler.cc.o \
 	$O/parallel.sharedmpi.o \
 	$O/read_parameter_file.shared.o \
 	$O/read_value_parameters.shared.o \
@@ -645,6 +653,7 @@ xwrite_profile_SHARED_OBJECTS = \
 	$O/model_Sohl.shared.o \
 	$O/model_topo_bathy.shared.o \
 	$O/model_vpremoon.shared.o \
+	$O/arrival_order_scheduler.cc.o \
 	$O/parallel.sharedmpi.o \
 	$O/param_reader.cc.o \
 	$O/read_compute_parameters.shared.o \

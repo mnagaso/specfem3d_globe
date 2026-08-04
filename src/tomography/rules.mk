@@ -124,6 +124,7 @@ xadd_model_SHARED_OBJECTS = \
 	$O/shared_par.shared_module.o \
 	$O/specfem3D_par.solverstatic_module.o \
 	$O/read_mesh_parameters.solverstatic.o \
+	$O/arrival_order_scheduler.cc.o \
 	$O/parallel.sharedmpi.o \
 	$O/exit_mpi.shared.o \
 	$O/flush_system.shared.o \
@@ -192,6 +193,7 @@ xsum_kernels_SHARED_OBJECTS = \
 	$O/shared_par.shared_module.o \
 	$O/specfem3D_par.solverstatic_module.o \
 	$O/read_mesh_parameters.solverstatic.o \
+	$O/arrival_order_scheduler.cc.o \
 	$O/parallel.sharedmpi.o \
 	$O/exit_mpi.shared.o \
 	$O/flush_system.shared.o \
@@ -240,6 +242,7 @@ xsum_preconditioned_kernels_SHARED_OBJECTS = \
 	$O/shared_par.shared_module.o \
 	$O/specfem3D_par.solverstatic_module.o \
 	$O/read_mesh_parameters.solverstatic.o \
+	$O/arrival_order_scheduler.cc.o \
 	$O/parallel.sharedmpi.o \
 	$O/exit_mpi.shared.o \
 	$O/flush_system.shared.o \

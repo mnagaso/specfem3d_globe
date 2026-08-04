@@ -71,6 +71,7 @@ gindex3D_SHARED_OBJECTS += \
 	$O/hex_nodes.shared.o \
 	$O/hdf5_manager.shared_hdf5_module.o \
 	$O/memory_eval.shared.o \
+	$O/arrival_order_scheduler.cc.o \
 	$O/parallel.sharedmpi.o \
 	$O/param_reader.cc.o \
 	$O/read_compute_parameters.shared.o \
