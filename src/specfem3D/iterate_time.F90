@@ -122,6 +122,7 @@
 
     do istage = 1, NSTAGE_TIME_SCHEME ! is equal to 1 if Newmark because only one stage then
 
+      call timing_update_start()
       if (USE_LDDRK) then
         ! update displacement using Runge-Kutta time scheme
         call update_displ_lddrk()
@@ -129,16 +130,25 @@
         ! update displacement using Newmark time scheme
         call update_displ_Newmark()
       endif
+      call timing_update_stop()
 
       ! update Poisson's load and solve Poisson's equations
-      if (FULL_GRAVITY) call SIEM_solve_poisson()
+      if (FULL_GRAVITY) then
+        call timing_poisson_start()
+        call SIEM_solve_poisson()
+        call timing_poisson_stop()
+      endif
 
       ! acoustic solver for outer core
       ! (needs to be done first, before elastic one)
+      call timing_acoustic_start()
       call compute_forces_acoustic()
+      call timing_acoustic_stop()
 
       ! elastic solver for crust/mantle and inner core
+      call timing_viscoelastic_start()
       call compute_forces_viscoelastic()
+      call timing_viscoelastic_stop()
 
     enddo ! end of very big external loop on istage for all the stages of the LDDRK time scheme (only one stage if Newmark)
 
@@ -184,6 +194,7 @@
         ! note: NSTAGE_TIME_SCHEME is equal to 1 if Newmark because only one stage then
         do istage = 1, NSTAGE_TIME_SCHEME
 
+          call timing_update_start()
           if (USE_LDDRK) then
             ! update displacement using Runge-Kutta time scheme
             call update_displ_lddrk_backward()
@@ -191,13 +202,18 @@
             ! update displacement using Newmark time scheme
             call update_displ_Newmark_backward()
           endif
+          call timing_update_stop()
 
           ! acoustic solver for outer core
           ! (needs to be done first, before elastic one)
+          call timing_acoustic_start()
           call compute_forces_acoustic_backward()
+          call timing_acoustic_stop()
 
           ! elastic solver for crust/mantle and inner core
+          call timing_viscoelastic_start()
           call compute_forces_viscoelastic_backward()
+          call timing_viscoelastic_stop()
 
         enddo
 
