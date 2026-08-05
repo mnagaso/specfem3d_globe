@@ -15,6 +15,8 @@
 !   - wait_io : time compute nodes block in wait_all_send (HDF5_IO_NODES > 0)
 !   - idle_io : time IO nodes block in MPI_Probe waiting for messages
 !   - boun_d2h / boun_h2d : MPI boundary GPU<->CPU transfer (nested in compute)
+!   - update / poisson / acoustic / viscoelastic : top-level compute phases
+!     (nested in compute; forward and backward variants are accumulated together)
 !
 !=====================================================================
 
@@ -33,6 +35,10 @@ module timing_accounting
   ! Nested inside compute: exposed MPI-boundary D2H / H2D wall time
   double precision :: time_boun_d2h = 0.0d0
   double precision :: time_boun_h2d = 0.0d0
+  double precision :: time_update = 0.0d0
+  double precision :: time_poisson = 0.0d0
+  double precision :: time_acoustic = 0.0d0
+  double precision :: time_viscoelastic = 0.0d0
 
   ! scratch start-time variables
   double precision :: t_compute_start = 0.0d0
@@ -41,6 +47,10 @@ module timing_accounting
   double precision :: t_idle_start    = 0.0d0
   double precision :: t_boun_d2h_start = 0.0d0
   double precision :: t_boun_h2d_start = 0.0d0
+  double precision :: t_update_start = 0.0d0
+  double precision :: t_poisson_start = 0.0d0
+  double precision :: t_acoustic_start = 0.0d0
+  double precision :: t_viscoelastic_start = 0.0d0
 
   ! interval wall-clock start (set by timing_reset)
   double precision :: t_interval_start = 0.0d0
@@ -54,6 +64,10 @@ contains
     time_idle_io = 0.0d0
     time_boun_d2h = 0.0d0
     time_boun_h2d = 0.0d0
+    time_update = 0.0d0
+    time_poisson = 0.0d0
+    time_acoustic = 0.0d0
+    time_viscoelastic = 0.0d0
     t_interval_start = MPI_Wtime()
   end subroutine timing_reset
 
@@ -65,6 +79,39 @@ contains
   subroutine timing_compute_stop()
     time_compute = time_compute + (MPI_Wtime() - t_compute_start)
   end subroutine timing_compute_stop
+
+  ! ---- top-level compute phase timing (nested inside compute) ----
+  subroutine timing_update_start()
+    t_update_start = MPI_Wtime()
+  end subroutine timing_update_start
+
+  subroutine timing_update_stop()
+    time_update = time_update + (MPI_Wtime() - t_update_start)
+  end subroutine timing_update_stop
+
+  subroutine timing_poisson_start()
+    t_poisson_start = MPI_Wtime()
+  end subroutine timing_poisson_start
+
+  subroutine timing_poisson_stop()
+    time_poisson = time_poisson + (MPI_Wtime() - t_poisson_start)
+  end subroutine timing_poisson_stop
+
+  subroutine timing_acoustic_start()
+    t_acoustic_start = MPI_Wtime()
+  end subroutine timing_acoustic_start
+
+  subroutine timing_acoustic_stop()
+    time_acoustic = time_acoustic + (MPI_Wtime() - t_acoustic_start)
+  end subroutine timing_acoustic_stop
+
+  subroutine timing_viscoelastic_start()
+    t_viscoelastic_start = MPI_Wtime()
+  end subroutine timing_viscoelastic_start
+
+  subroutine timing_viscoelastic_stop()
+    time_viscoelastic = time_viscoelastic + (MPI_Wtime() - t_viscoelastic_start)
+  end subroutine timing_viscoelastic_stop
 
   ! ---- IO timing ----
   subroutine timing_io_start()
@@ -138,7 +185,7 @@ contains
     character(len=8)  :: date_str
     character(len=10) :: time_str
     character(len=16) :: role_str
-    character(len=256) :: fmt
+    character(len=512) :: fmt
     double precision :: time_other, total_elapsed, current_time
 
     ! interval elapsed time (from last timing_reset)
@@ -175,7 +222,8 @@ contains
     endif
 
     fmt = '(A,I0,A,I0,A,I0,A,I0,A,A,A,F14.6,A,F14.6,A,F14.6,A,F14.6,' // &
-          'A,F14.6,A,F14.6,A,F14.6,A,F14.6,A,F24.12,A,A,A,A)'
+          'A,F14.6,A,F14.6,A,F14.6,A,F14.6,A,F14.6,A,F14.6,A,F14.6,A,F14.6,' // &
+          'A,F24.12,A,A,A,A)'
     write(unit_number, fmt) &
       'it_begin: ', it_start, &
       ', it_end: ', it_end, &
@@ -190,6 +238,10 @@ contains
       ', total (s): ', total_elapsed, &
       ', boun_d2h (s): ', time_boun_d2h, &
       ', boun_h2d (s): ', time_boun_h2d, &
+      ', update (s): ', time_update, &
+      ', poisson (s): ', time_poisson, &
+      ', acoustic (s): ', time_acoustic, &
+      ', viscoelastic (s): ', time_viscoelastic, &
       ', mpi_wtime (s): ', current_time, &
       ', date: ', trim(date_str), &
       ', time: ', trim(time_str)
