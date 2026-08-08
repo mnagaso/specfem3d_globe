@@ -17,17 +17,19 @@ The timing is recorded **periodically** rather than as a single accumulated tota
 
 **`iterate_time_undoatt.F90` (undo-attenuation):**
 ```
-subset 1 start: checkpoint IO (save_forward_arrays_undoatt)
-  compute it=1..200 + movie IO     → record, reset   (includes checkpoint IO)
+subset 1 start: checkpoint IO (save_forward_arrays_undoatt) → record (it_begin=it_end=1), reset
+  compute it=1..200 + movie IO     → record, reset
   compute it=201..400 + movie IO   → record, reset
   ...
   compute it=601..700 + movie IO   → record, reset
-subset 2 start: checkpoint IO
-  compute it=701..900 + movie IO   → record, reset   (includes checkpoint IO)
+subset 2 start: checkpoint IO                                  → record (it_begin=it_end=701), reset
+  compute it=701..900 + movie IO   → record, reset
   ...
 ```
 Recording fires every `NTSTEP_BETWEEN_OUTPUT_INFO` steps and at `it_end`.
-Checkpoint IO time is included in the first interval of each subset.
+Checkpoint IO is recorded immediately after `save_forward_arrays_undoatt()` (or
+`read_forward_arrays_undoatt()` for adjoint) with `it_begin = it_end = it + 1`
+marking the upcoming subset start step.
 Any remaining steps at subset boundaries are also recorded.
 
 **`iterate_time.F90` (no undo-attenuation):**
