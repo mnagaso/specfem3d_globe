@@ -262,6 +262,12 @@ module io_throttle
   ! Initialization flag
   logical :: io_throttle_initialized = .false.
 
+  ! One-shot causal isolation experiment controls. These are environment-only
+  ! so ordinary Par_file runs remain unchanged.
+  character(len=32) :: experiment_mode = ''
+  integer :: experiment_checkpoint = 2
+  double precision :: experiment_delay_sec = 0.0d0
+
   private
 
   ! Public subroutines
@@ -290,6 +296,7 @@ module io_throttle
   public :: current_max_bandwidth_mbps
   public :: my_run_group
   public :: active_stagger_mode
+  public :: io_throttle_experiment_post_checkpoint
 
 contains
 
@@ -316,6 +323,8 @@ contains
 
     ! Store group index
     my_run_group = mygroup
+
+    call io_throttle_read_experiment_env()
 
     ! Set current values from Par_file parameters
     current_delay_sec = IO_PRE_CHECKPOINT_DELAY_SEC
@@ -435,6 +444,44 @@ contains
     i = 0
 
   end subroutine io_throttle_init
+
+  !=====================================================================
+  !> Read controls for the one-shot phase/I/O causal isolation experiment.
+  !=====================================================================
+  subroutine io_throttle_read_experiment_env()
+
+    implicit none
+
+    character(len=128) :: env
+    integer :: status, ios
+
+    experiment_mode = ''
+    experiment_checkpoint = 2
+    experiment_delay_sec = 0.0d0
+
+    env = ''
+    call get_environment_variable('SPECFEM_EXPERIMENT_MODE', env, status=status)
+    if (status == 0) experiment_mode = trim(adjustl(env))
+
+    env = ''
+    call get_environment_variable('SPECFEM_EXPERIMENT_CHECKPOINT', env, status=status)
+    if (status == 0 .and. len_trim(env) > 0) then
+      read(env, *, iostat=ios) experiment_checkpoint
+      if (ios /= 0 .or. experiment_checkpoint < 1) experiment_checkpoint = 2
+    endif
+
+    env = ''
+    call get_environment_variable('SPECFEM_EXPERIMENT_DELAY_SEC', env, status=status)
+    if (status == 0 .and. len_trim(env) > 0) then
+      read(env, *, iostat=ios) experiment_delay_sec
+      if (ios /= 0 .or. experiment_delay_sec < 0.0d0) experiment_delay_sec = 0.0d0
+    endif
+
+    if (trim(experiment_mode) /= 'phase_only' .and. trim(experiment_mode) /= 'io_only') then
+      experiment_mode = ''
+    endif
+
+  end subroutine io_throttle_read_experiment_env
 
   !=====================================================================
   subroutine io_throttle_resolve_mode()
@@ -566,6 +613,28 @@ contains
 
     last_checkpoint_id = iteration_on_subset
     last_target_spacing_sec = io_throttle_get_spacing_sec()
+
+    ! Causal isolation experiment: align the checkpoint start across all
+    ! simulations. For io_only, add the group offset before the write;
+    ! phase_only deliberately leaves this point unshifted.
+    if ((trim(experiment_mode) == 'phase_only' .or. trim(experiment_mode) == 'io_only') .and. &
+        iteration_on_subset == experiment_checkpoint) then
+      call synchronize_all()
+      call synchronize_all_world()
+      last_assigned_delay_sec = 0.0d0
+      if (trim(experiment_mode) == 'io_only' .and. my_run_group > 0) then
+        last_assigned_delay_sec = dble(my_run_group) * experiment_delay_sec
+        call io_throttle_sleep(last_assigned_delay_sec)
+      endif
+      if (myrank == 0) then
+        write(IMAIN,'(a,i6,a,a,a,i3,a,f8.4,a)') &
+          '  causal experiment: checkpoint ', iteration_on_subset, &
+          ' mode=', trim(experiment_mode), ' group ', my_run_group, &
+          ' pre_delay=', last_assigned_delay_sec, ' sec'
+        call flush_IMAIN()
+      endif
+      return
+    endif
 
     if (trim(active_stagger_mode) == 'none') then
       last_assigned_delay_sec = 0.0d0
@@ -920,6 +989,41 @@ contains
     endif
 
   end subroutine io_throttle_coordinated_post_checkpoint
+
+  !=====================================================================
+  !> Apply the post-write part of the one-shot causal isolation experiment.
+  !! Both modes wait for all groups to finish CP2 I/O. phase_only then
+  !! shifts compute resumption by group; io_only resumes all groups together.
+  !=====================================================================
+  subroutine io_throttle_experiment_post_checkpoint(myrank, iteration_on_subset)
+
+    implicit none
+
+    integer, intent(in) :: myrank
+    integer, intent(in) :: iteration_on_subset
+    double precision :: phase_delay
+
+    if ((trim(experiment_mode) /= 'phase_only' .and. trim(experiment_mode) /= 'io_only') .or. &
+        iteration_on_subset /= experiment_checkpoint) return
+
+    call synchronize_all()
+    call synchronize_all_world()
+
+    phase_delay = 0.0d0
+    if (trim(experiment_mode) == 'phase_only' .and. my_run_group > 0) then
+      phase_delay = dble(my_run_group) * experiment_delay_sec
+      call io_throttle_sleep(phase_delay)
+    endif
+
+    if (myrank == 0) then
+      write(IMAIN,'(a,i6,a,a,a,i3,a,f8.4,a)') &
+        '  causal experiment: checkpoint ', iteration_on_subset, &
+        ' mode=', trim(experiment_mode), ' group ', my_run_group, &
+        ' post_delay=', phase_delay, ' sec'
+      call flush_IMAIN()
+    endif
+
+  end subroutine io_throttle_experiment_post_checkpoint
 
   !=====================================================================
   !> Effective checkpoint spacing in seconds

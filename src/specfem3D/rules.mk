@@ -42,6 +42,7 @@ xspecfem3D_OBJECTS = \
 
 specfem3D_SOLVER_OBJECTS = \
 	$O/assemble_MPI_gpu.solver.o \
+	$O/nvtx_ranges.solver_cc.o \
 	$O/comp_source_spectrum.solver.o \
 	$O/compute_adj_source_frechet.solver.o \
 	$O/convert_time.solver.o \
@@ -535,6 +536,9 @@ $O/%.solver.o: $S/%.F90 $O/shared_par.shared_module.o
 
 $O/%.solver_cc.o: $S/%.c ${SETUP}/config.h
 	${CC} -c $(CPPFLAGS) $(CFLAGS) -o $@ $<
+
+$O/nvtx_ranges.solver_cc.o: $S/nvtx_ranges.c ${SETUP}/config.h
+	${CC} -c $(CPPFLAGS) $(CFLAGS) $(CUDA_INC) -o $@ $<
 
 ###
 ### VTK compilation

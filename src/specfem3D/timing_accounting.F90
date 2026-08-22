@@ -27,6 +27,20 @@ module timing_accounting
   implicit none
   private :: MPI_Wtime
 
+  interface
+    subroutine specfem_nvtx_acoustic_push() bind(C, name='specfem_nvtx_acoustic_push')
+    end subroutine specfem_nvtx_acoustic_push
+
+    subroutine specfem_nvtx_acoustic_pop() bind(C, name='specfem_nvtx_acoustic_pop')
+    end subroutine specfem_nvtx_acoustic_pop
+
+    subroutine specfem_nvtx_viscoelastic_push() bind(C, name='specfem_nvtx_viscoelastic_push')
+    end subroutine specfem_nvtx_viscoelastic_push
+
+    subroutine specfem_nvtx_viscoelastic_pop() bind(C, name='specfem_nvtx_viscoelastic_pop')
+    end subroutine specfem_nvtx_viscoelastic_pop
+  end interface
+
   ! accumulators (seconds)
   double precision :: time_compute = 0.0d0
   double precision :: time_io      = 0.0d0
@@ -98,19 +112,23 @@ contains
   end subroutine timing_poisson_stop
 
   subroutine timing_acoustic_start()
+    call specfem_nvtx_acoustic_push()
     t_acoustic_start = MPI_Wtime()
   end subroutine timing_acoustic_start
 
   subroutine timing_acoustic_stop()
     time_acoustic = time_acoustic + (MPI_Wtime() - t_acoustic_start)
+    call specfem_nvtx_acoustic_pop()
   end subroutine timing_acoustic_stop
 
   subroutine timing_viscoelastic_start()
+    call specfem_nvtx_viscoelastic_push()
     t_viscoelastic_start = MPI_Wtime()
   end subroutine timing_viscoelastic_start
 
   subroutine timing_viscoelastic_stop()
     time_viscoelastic = time_viscoelastic + (MPI_Wtime() - t_viscoelastic_start)
+    call specfem_nvtx_viscoelastic_pop()
   end subroutine timing_viscoelastic_stop
 
   ! ---- IO timing ----

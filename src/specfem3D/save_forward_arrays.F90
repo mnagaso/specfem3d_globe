@@ -224,7 +224,8 @@
                          io_throttle_apply_post_write_delay, &
                          io_throttle_coordinated_post_checkpoint, &
                          io_throttle_record_write_timing, &
-                         io_throttle_maybe_fsync_after_checkpoint
+                         io_throttle_maybe_fsync_after_checkpoint, &
+                         io_throttle_experiment_post_checkpoint
 
   implicit none
 
@@ -381,6 +382,9 @@
 
   ! Record arrival/start/end timing for scheduler analysis
   call io_throttle_record_write_timing(myrank, bytes_written_this_rank, write_elapsed)
+
+  ! Causal isolation experiment (CP2 only), then ordinary coordinated mode.
+  call io_throttle_experiment_post_checkpoint(myrank, iteration_on_subset)
 
   ! Align all simultaneous runs after checkpoint I/O completes
   call io_throttle_coordinated_post_checkpoint(myrank, iteration_on_subset)
